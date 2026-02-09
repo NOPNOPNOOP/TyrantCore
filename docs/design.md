@@ -16,11 +16,10 @@ TyrantCore 是**基础设施层**，不是应用层。
 - 关系模型 — 定义节点之间的连接和约束
 - 消息协议与路由 — 让节点之间能沟通，控制消息的可达性
 - 引用机制 — 统一的实体间引用，支持懒加载
-- 文档存储 — Agent 产出物的存储和引用
 - 任务模型 — 任务的创建、状态追踪
 - 系统 API — Agent 创建/销毁、人才池查询/招募、审计
-- 权限模型 — 控制谁能调用哪些系统 API（带作用域）
-- 事件系统 — 状态变化的通知和订阅
+- 权限模型 — 控制谁能调用哪些系统 API
+- 事件系统 — pub/sub 事件总线，系统可观测性（append-only 日志）
 - 持久化 — 保存状态、记忆、消息
 - 容错与恢复 — 重试、恢复、故障上报
 
@@ -87,7 +86,6 @@ Node:
   id: string              # 唯一标识 (uuid)
   type: enum              # HUMAN / LOCAL_AGENT / EXTERNAL_AGENT
   name: string            # 显示名称
-  capabilities: list      # 能力声明 ["coding", "research", "translation"]
   is_owner: bool          # 是否为网络所有者（Tyrant）
   endpoint:               # 如何联系这个节点
     protocol: string      # "local" / "http" / "websocket" / "adapter"
@@ -95,7 +93,7 @@ Node:
     config: object        # 适配器特有配置（可选）
   status: enum            # ONLINE / BUSY / OFFLINE / SUSPENDED
   permissions: object     # 系统级权限（见权限模型）
-  metadata: object        # 扩展信息（Agent 可自由使用，如存储"简历"）
+  metadata: object        # 扩展信息（能力声明、"简历"等，Agent 自由使用）
 ```
 
 ### Tyrant
@@ -113,45 +111,30 @@ Node:
 
 ### 关系数据结构
 
-不同关系类型有不同的语义，字段名称反映其含义：
+统一的关系结构，通过 type 区分语义：
 
 ```yaml
-# 上下级关系（有方向）
-ReportsTo:
+Relation:
   id: string
-  superior: string        # 上级节点ID
-  subordinate: string     # 下级节点ID
-  config: object          # 关系配置
-
-# 协作关系（对称）
-Peer:
-  id: string
-  peer_a: string          # 节点A
-  peer_b: string          # 节点B
-  config: object
-
-# 认识关系（单向发起）
-Acquaintance:
-  id: string
-  initiator: string       # 发起方
-  target: string          # 目标方
-  config: object
+  type: enum              # REPORTS_TO / CONNECTED
+  node_a: string          # REPORTS_TO 时为上级，CONNECTED 时顺序无关
+  node_b: string          # REPORTS_TO 时为下级
+  config: object          # 关系配置（Agent Skill 自定义）
 ```
 
 ### 关系类型
 
 | 类型 | 含义 | 说明 |
 |------|------|------|
-| REPORTS_TO | 上下级 | superior 是上级，subordinate 是下级，有方向 |
-| PEER | 协作伙伴 | 同一 superior 的 subordinate 自动互为 PEER，也可跨分支手动建立，对称 |
-| ACQUAINTANCE | 认识 | “我知道你存在”，可单向发起，发起后双方可互发消息 |
+| REPORTS_TO | 上下级 | node_a 是上级，node_b 是下级，有方向 |
+| CONNECTED | 连接 | 双向对等，同一上级的下属自动建立，也可手动建立 |
 
 ### 关系约束
 
 | 约束 | 规则 |
 |------|------|
 | 上级数量 | 单上级（REPORTS_TO 只能有一个） |
-| 结构 | 上下级关系形成树，PEER/ACQUAINTANCE 可跨分支形成图 |
+| 结构 | 上下级关系形成树，CONNECTED 可跨分支形成图 |
 | 循环 | REPORTS_TO 不允许循环 |
 | 孤岛 | 不允许，每个节点必须能通过关系链追溯到 Tyrant（create_agent 强制要求 parent） |
 
@@ -164,13 +147,12 @@ Acquaintance:
 | 建立 REPORTS_TO | `create_agent`（创建新 Agent）或 `talent_pool.recruit`（从人才池招募），原子完成节点创建/激活 + 建立关系 |
 | 解除 REPORTS_TO | `talent_pool.release`，原子完成解除关系 + 放入人才池 |
 
-**PEER / ACQUAINTANCE** 通过 `relation.create` / `relation.remove` 管理：
+**CONNECTED** 通过 `relation.create` / `relation.remove` 管理：
 
 | 操作 | 规则 |
 |------|------|
-| 建立 PEER | 由上级指定（`relation.create`） |
-| 建立 ACQUAINTANCE | 由上级指定，或有权限的节点发起 |
-| 解除 PEER / ACQUAINTANCE | 由上级或有权限的节点发起（`relation.remove`） |
+| 建立 CONNECTED | 由上级指定（`relation.create`），或同一上级的下属自动建立 |
+| 解除 CONNECTED | 由上级或有权限的节点发起（`relation.remove`） |
 
 不存在"辞职"（Agent 无意愿）和"调岗"（release + recruit 已覆盖）。
 
@@ -210,17 +192,12 @@ Acquaintance:
 |------|----------|
 | 上级 → 下级 | REPORTS_TO 关系存在 |
 | 下级 → 上级 | REPORTS_TO 关系存在 |
-| PEER → PEER | PEER 关系存在 |
-| 任意 → ACQUAINTANCE | ACQUAINTANCE 关系存在 |
-| 系统 → 任意节点 | 始终允许（SYSTEM 消息） |
-| 同 Task participants 互发 | Task 的 participants 列表中的节点可互发（仅直接同一 Task，不看父子 Task） |
-
-最后一条是**基于 Task 的临时通道**：两个没有直接关系的节点，如果都在同一 Task 的 `participants` 列表中（不含父子 Task），可以在 Task 存续期间直接通信。Task 结束后通道自动关闭。解决临时跨部门协作的需求。
+| 连接节点互发 | CONNECTED 关系存在 |
+| 系统 → 任意节点 | 始终允许 |
 
 #### 不可达时的扩展方式
 
-- **介绍机制**：上级调用 `relation.create(A, B, ACQUAINTANCE)` 建立关系，系统自动通知双方
-- **Task 协作**：通过共享 Task 获得临时通信通道
+- **介绍机制**：上级调用 `relation.create(A, B)` 建立 CONNECTED 关系，系统自动通知双方
 
 #### 投递机制
 
@@ -235,11 +212,11 @@ Acquaintance:
 
 #### 多播
 
-消息的 `to` 字段支持 list。系统拆成多条独立消息分别投递，每条独立 ACK。本质是“批量单发”。
+消息的 `to` 字段支持 list。系统拆成多条独立消息分别投递，每条独立 ACK。本质是"批量单发"。
 
 #### 不支持转发
 
-不需要专门的“转发”机制。Agent 可以通过引用原消息 + 创建新消息来实现信息传递。引用机制（见第四部分）比转发更高效且不浪费 token。
+不需要专门的"转发"机制。Agent 可以通过引用原消息 + 创建新消息来实现信息传递。引用机制比转发更高效且不浪费 token。
 
 ### 内部 vs 外部消息
 
@@ -255,35 +232,34 @@ Message:
   # 元信息
   id: string
   timestamp: datetime
-  expires_at: datetime        # 过期时间（有 expire 机制，暂时无限）
+  expires_at: datetime        # 过期时间（默认 null，不过期）
 
   # 路由（from 由系统填充，不可伪造）
   from: string                # 发送者节点ID
   to: string | list           # 接收者（单人或多人）
 
   # 类型与优先级
-  type: enum
-  priority: enum
+  type: string                # 自由定义（基础设施不约束）
+  priority: enum              # SYSTEM / URGENT / NORMAL / LOW
 
-  # 内容（混合格式：结构化字段 + 自然语言字段）
-  content: object
+  # 内容
+  content: object             # 消息内容（格式由 Agent Skill 决定）
 
-  # 引用（统一引用机制，见第四部分）
-  references: list[Reference]
+  # 引用
+  references: list[Reference] # 统一引用（见引用机制）
 
   # 线程
   thread_id: string           # 对话线程
 
   # 确认机制（内部消息）
   requires_ack: bool
-  # ack_received 和 ack_timeout 由消息总线的投递记录管理，不在 Message 实体中
 ```
 
 ### 消息优先级
 
 ```yaml
 priority:
-  SYSTEM: 0       # 系统级（状态同步等）
+  SYSTEM: 0       # 系统级
   URGENT: 1       # 紧急
   NORMAL: 2       # 普通
   LOW: 3          # 低优先级
@@ -291,108 +267,85 @@ priority:
 
 ### 消息类型
 
-基础设施只提供通用消息类型。具体的业务语义（招聘、审计、评价…）由 Agent 在 content 中自定义。
+`type` 为自由字符串，基础设施不约束。以下是推荐的常用类型：
 
-| 类型 | 用途 |
-|------|------|
-| TASK | 下发/请求任务（这是请求，不自动创建 Task 实体） |
-| REPORT | 汇报（进度、结果、问题） |
-| QUERY | 询问 / 请求信息 |
-| RESPONSE | 回复 |
-| CHAT | 自由沟通 |
-| NOTIFICATION | 通知（不需要回复） |
-| SYSTEM | 系统消息（ACK、PING、状态变化） |
+- `TASK` — 下发/请求任务
+- `REPORT` — 汇报（进度、结果、问题）
+- `QUERY` — 询问/请求信息
+- `RESPONSE` — 回复
+- `CHAT` — 自由沟通
+- `NOTIFICATION` — 通知
 
-**TASK 消息 vs Task 实体**：TASK 消息是“请求”（“我要你做 X”），Task 实体是“内部工作追踪”（“我正在做 X”）。收到 TASK 消息的 Agent 自行决定是否创建 Task 实体。
+Agent 可自定义任意类型。基础设施只关心 `from`（判断是否系统消息）和 `priority`（排序）。
 
-content 的格式不做强制约束，由 Agent 的 Skill 决定。
+### 引用机制（Reference）
 
-### 消息持久化
-
-- 所有消息都存储
-- 有 expire 机制（暂时设为无限）
-
----
-
-## 第四部分：引用机制（Reference）
-
-统一的实体间引用系统。用于消息引用消息、任务引用来源、任何实体引用文档等。
-
-### 引用数据结构
+统一的实体间引用，嵌入在 Message 和 Task 的 `references` 字段中。
 
 ```yaml
 Reference:
-  ref_type: enum      # MESSAGE / TASK / DOCUMENT / NODE
+  ref_type: enum      # MESSAGE / TASK / NODE
   ref_id: string      # 被引用实体的 ID
   relation: string    # 引用关系: "reply_to" / "origin" / "parent" / "attachment" / "related" / ...
 ```
 
-### 设计原则
-
-- **引用是懒加载的**：只传 ref_id，不传内容。接收方按需调用 `reference.resolve(ref_id)` 获取内容
-- **节省 token**：避免在消息中复制大段内容，引用代替复制
-- **统一模型**：`reply_to`、`task_id`、`origin` 等都通过引用表达，不再需要单独字段
+- **引用是懒加载的**：只传 ref_id，不传内容。接收方按需获取被引用实体
+- **节省 token**：引用代替复制，避免在消息中重复大段内容
 - **关系自描述**：`relation` 字段说明引用的语义
 
-### 引用 API
+### 消息持久化
 
-| API | 作用 |
-|------|------|
-| reference.resolve | 根据 ref_type + ref_id 获取被引用实体的内容 |
+- 所有消息都存储
+- 有 expire 机制（基于 expires_at 字段）
 
-### 示例
+### 事件系统（Event）
 
-消息回复另一条消息：
-```yaml
-references:
-  - ref_type: MESSAGE
-    ref_id: msg_abc123
-    relation: reply_to
-```
-
-任务记录来源：
-```yaml
-references:
-  - ref_type: MESSAGE
-    ref_id: msg_xyz789
-    relation: origin
-  - ref_type: NODE
-    ref_id: node_human_01
-    relation: requester
-```
-
----
-
-## 第五部分：文档存储（Document）
-
-Agent 产出物（代码、报告、数据、共享知识等）的轻量存储，可通过引用机制被其他实体引用。
+事件与消息是两个独立的机制：
+- **消息**：有发送方和接收方，受路由规则约束，用于节点间通信
+- **事件**：有来源但无指定接收方，pub/sub 模式，用于系统可观测性
 
 ```yaml
-Document:
+Event:
   id: string
-  creator: string         # 谁创建的
-  content_type: string    # "text" / "code" / "data" / ...
-  content: string | path  # 小内容直接存，大文件存路径
-  metadata: object        # 扩展信息
-  created_at: datetime
+  type: string          # "node.status_changed" / "task.completed" / 自定义
+  timestamp: datetime
+  source: string        # 触发来源（节点ID 或 "system"）
+  data: object          # 事件数据
 ```
 
-### Document API
+#### 系统事件（系统自动发布）
 
-| API | 作用 |
-|------|------|
-| document.create | 创建文档 |
-| document.get | 获取文档内容 |
-| document.list | 列出文档（支持过滤） |
-| document.delete | 删除文档 |
+| 事件 | 触发时机 |
+|------|----------|
+| node.status_changed | 节点状态变化（ONLINE → OFFLINE 等） |
+| relation.created | 新关系建立 |
+| relation.removed | 关系解除 |
+| task.status_changed | 任务状态变化 |
+| node.destroyed | 节点被销毁 |
+| permission.granted | 权限被授予 |
+| agent.crashed | Agent 执行异常 |
+
+Agent 也可通过 API 发布自定义事件（如 "build.completed"、"anomaly.detected"）。
+
+#### 订阅
+
+- 节点订阅自己关心的事件类型
+- 不受关系路由约束（事件是广播，不是通信）
+- 权限控制：订阅范围受子树约束（不能订阅子树外节点的事件，除非有 audit 权限）
+
+#### 持久化
+
+- Append-only 事件日志，支持从指定时间点回放
+- 离线节点醒来后可消费错过的事件
+- 保留策略由系统配置（如保留最近 N 天）
 
 ---
 
-## 第六部分：任务（Task）
+## 第四部分：任务（Task）
 
 Task 是独立的一等实体。**Task 由 Agent 创建（通过系统 API），不由消息自动产生。**
 
-Message 是请求（“我要你做 X”），Task 是内部工作追踪（“我正在做 X”）。
+Message 是请求（"我要你做 X"），Task 是内部工作追踪（"我正在做 X"）。
 收到请求后，Agent 自行决定是否创建 Task、如何分解。
 
 ```yaml
@@ -400,16 +353,16 @@ Task:
   id: string
   creator: string             # 谁创建的（创建 Task 的内部节点）
   assignee: string            # 谁负责
-  participants: list[string]  # 参与者（含 assignee），用于 Task 临时通道
+  participants: list[string]  # 参与者（含 assignee），纯记录字段
   status: enum                # PENDING / IN_PROGRESS / BLOCKED / COMPLETED / FAILED
   content: object             # 任务内容（自然语言 + 结构化，格式由 Agent 决定）
-  parent_task: string         # 父任务（支持任务分解，保留为快捷字段）
-  references: list[Reference] # 引用（来源消息、相关文档、请求者等）
+  parent_task: string         # 父任务（支持任务分解）
+  references: list[Reference] # 引用（来源消息、相关文件、请求者等）
   created_at: datetime
   updated_at: datetime
 ```
 
-任务的 `references` 用于追溯来源（origin）、关联文档（attachment）等。没有引用的 Task 视为 Agent 自驱创建。
+任务的 `references` 用于追溯来源（origin）、关联文件（attachment）等。没有引用的 Task 视为 Agent 自驱创建。
 
 ### Task API
 
@@ -423,7 +376,7 @@ Task:
 
 ---
 
-## 第七部分：系统 API 与权限
+## 第五部分：系统 API 与权限
 
 ### 系统 API
 
@@ -438,46 +391,34 @@ Task:
 | talent_pool.recruit | 从人才池招募（原子：激活 Agent + 建立 REPORTS_TO） |
 | talent_pool.release | 释放 Agent（原子：解除 REPORTS_TO + 放入人才池） |
 | audit.inspect | 查看节点的状态/记忆（直接上级隐含，或需 audit 权限） |
-| relation.create | 建立 PEER 或 ACQUAINTANCE 关系（由上级指定） |
-| relation.remove | 解除 PEER 或 ACQUAINTANCE 关系 |
+| relation.create | 建立 CONNECTED 关系（由上级指定） |
+| relation.remove | 解除 CONNECTED 关系 |
 | task.create / update / query | 任务管理 |
-| document.create / get / list / delete | 文档管理 |
-| reference.resolve | 解析引用 |
 
 ### 权限模型
 
-权限挂在节点上，由上级授予，可下放。Tyrant 天生拥有全部权限（全局作用域）。
+权限挂在节点上，由上级授予，可下放。Tyrant 天生拥有全部权限。
 
-**权限 = 能力 + 作用域。** 默认作用域为节点自身的子树。
+权限作用域固定为节点自身的子树。Tyrant 的子树即整个网络，因此等效于全局。
 
 ```yaml
 Permissions:
-  create_agent:
-    enabled: bool
-    scope: enum             # SUBTREE（默认）/ GLOBAL（仅 Tyrant）
-  destroy_agent:
-    enabled: bool
-    scope: enum
-  recruit:
-    enabled: bool
-    scope: enum
-  audit:
-    enabled: bool
-    scope: enum             # SUBTREE = 只能审计自己子树
-  grant_permission:
-    enabled: bool
-    scope: enum
+  create_agent: bool
+  destroy_agent: bool
+  recruit: bool
+  audit: bool              # 查看子树内非直接下属的状态/记忆
+  grant_permission: bool
 ```
 
 ### 权限规则
 
 - **不可自提权**：节点不能给自己授予新权限，需要 Tyrant 或上级授予
-- **下放限制**：只能下放自己拥有的权限，且作用域不能超过自己的作用域
-- **销毁后的权限链**：中间节点被销毁后，它曾授予的权限默认保留，系统发出事件通知。有 audit 权限的节点可事后审查和撤销
+- **下放限制**：只能下放自己拥有的权限
+- **销毁后的权限链**：中间节点被销毁后，它曾授予的权限默认保留，系统发出通知。有 audit 权限的节点可事后审查和撤销
 
 ---
 
-## 第八部分：人才池
+## 第六部分：人才池
 
 基础设施提供人才池的存储和查询能力。
 
@@ -504,7 +445,7 @@ TalentPool:
 
 ---
 
-## 第九部分：外部接入与适配器
+## 第七部分：外部接入与适配器
 
 ### 适配器（Adapter）
 
@@ -543,11 +484,11 @@ Node:
 
 人类节点通过 IM（Slack、Discord、Telegram、Web UI 等）接入系统。
 
-适配器是**纯透明桥梁**，不做决策。“理解人类说了什么”的职责交给接收消息的 Agent（它本身就是 LLM）。
+适配器是**纯透明桥梁**，不做决策。"理解人类说了什么"的职责交给接收消息的 Agent（它本身就是 LLM）。
 
 IM 适配器的职责：
 
-- **消息传递**：IM → 系统：把 IM 文本包装成 Message（type: CHAT，content 放原始文本）；系统 → IM：把结构化消息渲染成人类可读格式
+- **消息传递**：IM → 系统：把 IM 文本包装成 Message（type: "CHAT"，content 放原始文本）；系统 → IM：把结构化消息渲染成人类可读格式
 - **会话映射**：IM 的 thread → 系统的 thread_id
 - **身份映射**：IM user ID ↔ 系统 Node ID
 - **一个适配器服务多个人类**：一个 Slack workspace adapter 管理多个人类节点
@@ -567,42 +508,7 @@ IM 适配器的职责：
 
 ---
 
-## 第十部分：事件系统
-
-基础设施提供轻量级事件总线，节点可订阅自己关心的事件。
-
-### 事件类型
-
-| 事件 | 触发时机 |
-|------|----------|
-| node.status_changed | 节点状态变化（ONLINE → OFFLINE 等） |
-| relation.created | 新关系建立 |
-| relation.removed | 关系解除 |
-| task.status_changed | 任务状态变化 |
-| node.destroyed | 节点被销毁 |
-| permission.granted | 权限被授予 |
-| agent.crashed | Agent 执行异常 |
-
-### 事件结构
-
-```yaml
-Event:
-  id: string
-  type: string              # 事件类型
-  timestamp: datetime
-  source: string            # 触发事件的节点/系统
-  data: object              # 事件数据
-```
-
-### 订阅
-
-- 节点可订阅与自己相关的事件（如：自己子树内的状态变化）
-- 事件通过 NOTIFICATION 类型消息投递到订阅者的 inbox
-- 使用第三方事件库实现，不自己造轮子
-
----
-
-## 第十一部分：Agent 运行模型
+## 第八部分：Agent 运行模型
 
 ### 初始方案：常驻进程
 
@@ -614,23 +520,23 @@ Event:
 ### 后续演进：按需唤醒
 
 当 Agent 数量增长后，迁移到按需唤醒模型：
-- Agent 平时“休眠”（无进程，状态持久化在磁盘）
+- Agent 平时"休眠"（无进程，状态持久化在磁盘）
 - 收到消息时由调度器唤醒
 - 处理完后重新休眠
 - 需要一个 **调度器（Scheduler）** 组件
 
-按需唤醒更符合“成本按 token 算”的哲学，但增加了实现复杂度，适合第二阶段。
+按需唤醒更符合"成本按 token 算"的哲学，但增加了实现复杂度，适合第二阶段。
 
 ---
 
-## 第十二部分：容错与恢复
+## 第九部分：容错与恢复
 
 ### Agent 崩溃
 
 1. **检测**：消息总线检测到 Agent 无响应（ACK 超时）
 2. **重试**：指数退避重试（1s → 2s → 4s → ...）
 3. **恢复**：从持久化状态恢复 Agent，重新投递未处理的消息
-4. **上报**：发出 `agent.crashed` 事件，通知上级节点
+4. **上报**：发送系统通知（agent.crashed），通知上级节点
 5. **放弃**：达到最大重试次数后标记为 FAILED，上级决定后续处理
 
 ### 系统重启
@@ -641,12 +547,12 @@ Event:
 
 ### ACK 超时
 
-- 内部消息：指数退避重发，达到上限后发出事件通知发送方
+- 内部消息：指数退避重发，达到上限后发送系统通知通知发送方
 - 外部消息：无 ACK 机制，只能等回复
 
 ---
 
-## 第十三部分：安全模型
+## 第十部分：安全模型
 
 ### 消息身份验证
 
@@ -660,7 +566,7 @@ Event:
 
 ### 销毁后的权限链
 
-- 中间节点被销毁后，系统发出 `node.destroyed` 事件
+- 中间节点被销毁后，系统发送 node.destroyed 通知
 - 该节点曾授予的权限默认保留（不级联撤销）
 - 有 audit 权限的节点可审查并手动撤销
 
@@ -672,27 +578,25 @@ Event:
 
 | 方面 | 决定 |
 |------|------|
-| 消息路由 | 关系可达模型 + Task 临时通道 |
-| 消息投递 | 中心化消息总线，inbox 队列 |
+| 核心实体 | Node、Relation、Message、Task（4 个） |
+| 消息路由 | 关系可达模型 |
+| 消息投递 | 中心化消息总线，inbox 队列，按优先级排序 |
 | 消息身份 | from 由系统填充，不可伪造 |
-| 消息类型 | 7 种通用类型，业务语义放 content |
-| 消息持久化 | 全部存储，expire 机制（暂无限） |
-| 引用机制 | 统一 Reference，懒加载 |
-| 文档存储 | 轻量 key-value 存储，通过引用关联 |
+| 消息类型 | type 为自由字符串，基础设施不约束 |
+| 消息持久化 | 全部存储，有 expire 机制 |
+| 引用机制 | 统一 Reference，懒加载，嵌入在 Message/Task 中 |
 | 任务模型 | 独立一等实体，Agent 通过 API 创建，Message 不自动产生 Task |
-| 关系结构 | 上下级为树，PEER/ACQUAINTANCE 可跨分支；三种类型独立数据结构 |
-| 关系操作 | REPORTS_TO 通过原子 API（create_agent / recruit / release）管理；PEER / ACQUAINTANCE 通过 relation.create / remove |
+| 关系类型 | REPORTS_TO（上下级树）+ CONNECTED（对等图），统一数据结构 |
+| 关系操作 | REPORTS_TO 通过原子 API（create_agent / recruit / release）管理；CONNECTED 通过 relation.create / remove |
 | 关系配置 | 绑定在关系上，config: object 由 Agent Skill 自定义 |
 | 上级权限 | 直接上级隐含 audit，非直接下属需显式授予 audit 权限 |
 | 适配器 | 传输层，不是节点，不做决策 |
 | Agent 创建 | create_agent 原子操作（创建节点 + 建立 REPORTS_TO） |
-| SERVICE 节点 | 已移除，能力通过系统 API 提供 |
-| 权限 | 能力 + 作用域，默认子树，Tyrant 全局 |
-| 权限自提权 | 禁止，需 Tyrant 授予 |
+| 权限 | 布尔开关，作用域固定为自身子树 |
 | 人才池 | 内部（初始空）+ 外部（可配多市场） |
-| 事件系统 | 轻量事件总线 + 订阅，用第三方库 |
+| 事件系统 | 独立 pub/sub 机制，append-only 日志，与消息系统分离 |
 | Agent 运行 | 初期常驻进程，后续按需唤醒 |
-| 容错 | 指数退避重试 → 恢复 → 上报事件 → 放弃 |
+| 容错 | 指数退避重试 → 恢复 → 通知上级 → 放弃 |
 | 外部节点 | 内部管内部，外部管外部 |
 | 通信 | 异步，内部有 ACK，外部等回复 |
 | 持久化 | 文件存储 |
@@ -730,13 +634,13 @@ Event:
      │             │ │(有recruit │ │ (外部Agent) │
      │             │ │ 权限)     │ │             │
      └──────┬──────┘ └───────────┘ └─────────────┘
-            │ PEER (跨分支)
+            │ CONNECTED (跨分支)
             └────────────────────────────┘
 
      ┌────────────────────────────────────────┐
      │            System Layer                  │
-     │  消息总线 / 事件总线 / 系统 API          │
-     │  create_agent / task / document / ...    │
+     │  消息总线 / 系统 API                     │
+     │  create_agent / task / audit / ...      │
      └────────────────────────────────────────┘
 ```
 
@@ -750,6 +654,8 @@ Event:
 - ROI 评估（成本管理）
 - Agent 晋升机制
 - 按需唤醒调度器
+- 文档存储（独立 Document 实体）
+- Task 临时通道（participants 作为路由依据）
 
 ---
 
@@ -757,15 +663,15 @@ Event:
 
 **场景：Tyrant 通过 Slack 让 Top Agent "写一个爬虫项目"**
 
-1. Tyrant 在 Slack 发消息 → IM Adapter 转为 Message（from: tyrant, to: top_agent, type: CHAT，content: 原始文本）
+1. Tyrant 在 Slack 发消息 → IM Adapter 转为 Message（from: tyrant, to: top_agent, type: "CHAT"，content: 原始文本）
 2. Top Agent 收到消息，调用 task.create 创建 Task（references 指向 Tyrant 的消息）
 3. Top Agent 分析任务，发现需要 "代码编写"、"测试"
 4. Top Agent 有 recruit 权限，调用 talent_pool.query 查找合适的 Agent
 5. 没有合适的 → 调用 create_agent 创建新 Agent（原子完成：创建节点 + 建立 REPORTS_TO + 注入 Skill）
-6. 发送 TASK 消息给新 Agent
+6. 发送 type: "TASK" 消息给新 Agent
 7. 新 Agent 收到消息，调用 task.create 创建子 Task（parent_task 指向上级 Task）
-8. 新 Agent 执行任务，通过 REPORT 消息汇报进度
-9. 完成后 Top Agent 更新 Task 状态，向 Tyrant 发送 REPORT 消息
+8. 新 Agent 执行任务，通过 type: "REPORT" 消息汇报进度
+9. 完成后 Top Agent 更新 Task 状态，向 Tyrant 发送 type: "REPORT" 消息
 10. Tyrant 在 Slack 收到汇报（IM Adapter 格式化为可读文本）
 11. 如需释放 Agent → 调用 talent_pool.release（原子完成：解除 REPORTS_TO + 放入人才池）
 
