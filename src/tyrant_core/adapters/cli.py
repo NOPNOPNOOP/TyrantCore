@@ -13,6 +13,7 @@ from prompt_toolkit.completion import WordCompleter
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.tree import Tree
 
 from tyrant_core.models import (
     Endpoint,
@@ -20,8 +21,11 @@ from tyrant_core.models import (
     Node,
     NodeStatus,
     NodeType,
-    Permissions,
+    Permission,
+    PermissionEffect,
     Priority,
+    Scope,
+    ScopeType,
 )
 from tyrant_core.api.system_api import SystemAPI
 from tyrant_core.bus.message_bus import MessageBus
@@ -33,9 +37,9 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 COMMANDS = [
-    "/talk", "/target", "/inbox", "/nodes", "/relations",
-    "/tasks", "/create", "/grant", "/inspect", "/events",
-    "/help", "/quit",
+    "/talk", "/target", "/inbox", "/messages", "/history",
+    "/nodes", "/relations", "/tasks", "/create", "/grant",
+    "/inspect", "/events", "/help", "/quit",
 ]
 
 
@@ -64,6 +68,7 @@ class CliAdapter:
     async def run(self) -> None:
         """主循环：初始化 Tyrant 节点，并行运行输入处理和消息接收。"""
         await self._ensure_tyrant_node()
+        await self._ensure_default_agent()
 
         self.console.print(Panel(
             "TyrantCore v0.1 — 输入 /help 查看命令",
@@ -88,19 +93,48 @@ class CliAdapter:
                 is_owner=True,
                 endpoint=Endpoint(protocol="cli", address="local"),
                 status=NodeStatus.ONLINE,
-                permissions=Permissions(
-                    create_agent=True,
-                    destroy_agent=True,
-                    recruit=True,
-                    audit=True,
-                    grant_permission=True,
-                ),
+                permissions=[],  # Tyrant: is_owner=True 隐含全局权限
                 created_at=now,
             )
             async with self.api.store.transaction():
                 await self.api.store.save_node(tyrant)
 
-    # ── 节点 ID 解析 ────────────────────────────────────────────────────────
+    # ── 默认节点（预设层） ──────────────────────────────────────────────
+
+    DEFAULT_AGENT_NAME = "首席助手"
+
+    async def _ensure_default_agent(self) -> None:
+        """预设层：启动时自动创建默认助手节点，Tyrant 开口即有人接。"""
+        async with self.api.store.transaction():
+            subs = await self.api.store.get_subordinates(self.tyrant_node_id)
+        if subs:
+            # 已有下属，设为默认目标
+            default_id = subs[0].node_b
+            async with self.api.store.transaction():
+                default_node = await self.api.store.get_node(default_id)
+            if default_node:
+                self.target = default_id
+                self.console.print(
+                    f"默认对话目标: {default_node.name} ({default_id[:12]})",
+                    style="green",
+                )
+            return
+
+        # 无下属，创建默认助手
+        node = await self.api.create_agent(
+            caller_id=self.tyrant_node_id,
+            name=self.DEFAULT_AGENT_NAME,
+            parent_id=self.tyrant_node_id,
+        )
+        if self.runtime:
+            await self.runtime.start_agent(node)
+        self.target = node.id
+        self.console.print(
+            f"已创建默认助手: {node.name} ({node.id[:12]})",
+            style="green",
+        )
+
+    # ── 节点 ID 解析 ──────────────────────────────────────────────────────
 
     async def _resolve_node_id(self, hint: str) -> str:
         """通过名称或 ID 前缀解析完整节点 ID。"""
@@ -171,6 +205,10 @@ class CliAdapter:
                 await self._cmd_grant(parts)
             elif cmd == "/inspect":
                 await self._cmd_inspect(parts)
+            elif cmd == "/messages":
+                await self._cmd_messages(parts)
+            elif cmd == "/history":
+                await self._cmd_history(parts)
             elif cmd == "/events":
                 await self._cmd_events(parts)
             else:
@@ -192,6 +230,8 @@ class CliAdapter:
         table.add_row("/tasks", "列出所有任务")
         table.add_row("/create <name> <instruction>", "创建 Agent")
         table.add_row("/grant <node_id> <permission>", "授予权限")
+        table.add_row("/messages [node_id]", "查看节点消息（默认当前目标）")
+        table.add_row("/history <node_id>", "查看节点 LLM 对话历史")
         table.add_row("/inspect <node_id>", "审计查看节点状态")
         table.add_row("/events [hours]", "查看事件日志（默认最近 1 小时）")
         table.add_row("/help", "显示帮助")
@@ -318,19 +358,124 @@ class CliAdapter:
     async def _cmd_grant(self, parts: list[str]) -> None:
         if len(parts) < 3:
             self.console.print(
-                "用法: /grant <node_id|name> <permission>", style="yellow"
+                "用法: /grant <node_id|name> <action>", style="yellow"
             )
             return
         node_id = await self._resolve_node_id(parts[1])
-        permission = parts[2]
+        action = parts[2]
+        permission = Permission(
+            action=action,
+            effect=PermissionEffect.ALLOW,
+            scope=Scope(type=ScopeType.SELF_SUBTREE),
+        )
         await self.api.grant_permission(
             caller_id=self.tyrant_node_id,
             target_id=node_id,
             permission=permission,
         )
         self.console.print(
-            f"已授予 {node_id[:12]} 权限: {permission}", style="green"
+            f"已授予 {node_id[:12]} 权限: {action} (self_subtree)",
+            style="green",
         )
+
+    async def _cmd_messages(self, parts: list[str]) -> None:
+        if len(parts) >= 2:
+            node_id = await self._resolve_node_id(parts[1])
+        elif self.target:
+            node_id = self.target
+        else:
+            self.console.print("用法: /messages [node_id|name]", style="yellow")
+            return
+        messages = await self.api.query_messages(
+            caller_id=self.tyrant_node_id, node_id=node_id,
+        )
+        if not messages:
+            self.console.print("无消息", style="dim")
+            return
+        table = Table(title=f"消息列表 ({node_id[:12]})")
+        table.add_column("时间")
+        table.add_column("类型", style="cyan")
+        table.add_column("发送者")
+        table.add_column("接收者")
+        table.add_column("内容")
+        for m in messages:
+            to_str = m.to if isinstance(m.to, str) else ",".join(m.to)
+            content_str = json.dumps(m.content, ensure_ascii=False)[:40]
+            table.add_row(
+                str(m.timestamp)[:19], m.type,
+                m.from_node[:12], to_str[:12], content_str,
+            )
+        self.console.print(table)
+
+    async def _cmd_history(self, parts: list[str]) -> None:
+        if len(parts) < 2:
+            self.console.print("用法: /history <node_id|name>", style="yellow")
+            return
+        node_id = await self._resolve_node_id(parts[1])
+        turns = await self.api.query_conversation_history(
+            caller_id=self.tyrant_node_id, target_id=node_id,
+        )
+        if not turns:
+            self.console.print("无对话历史", style="dim")
+            return
+
+        # 按 trigger_message_id 分组
+        from collections import OrderedDict
+        groups: OrderedDict[str | None, list] = OrderedDict()
+        for t in turns:
+            groups.setdefault(t.trigger_message_id, []).append(t)
+
+        # 获取相关消息（trigger + reply）
+        messages = await self.api.query_messages(
+            caller_id=self.tyrant_node_id, node_id=node_id, limit=200,
+        )
+        msg_map = {m.id: m for m in messages}
+        # reply 索引：trigger_msg_id → [reply messages]
+        reply_map: dict[str, list] = {}
+        for m in messages:
+            for ref in m.references:
+                if ref.relation == "reply_to" and m.from_node == node_id:
+                    reply_map.setdefault(ref.ref_id, []).append(m)
+
+        root = Tree(f"对话历史 ({node_id[:12]})")
+        for trigger_id, group_turns in groups.items():
+            # 构建 trigger 消息标题
+            trigger_msg = msg_map.get(trigger_id) if trigger_id else None
+            if trigger_msg:
+                trigger_text = trigger_msg.content.get("text", "")
+                label = (
+                    f"📨 [cyan][{trigger_msg.type}][/] "
+                    f"from {trigger_msg.from_node[:12]}  "
+                    f"{str(trigger_msg.timestamp)[:19]}\n"
+                    f"   {trigger_text[:80]}"
+                )
+            else:
+                label = f"📨 trigger: {(trigger_id or 'unknown')[:12]}"
+            branch = root.add(label)
+
+            # turns
+            for t in group_turns:
+                role_style = {
+                    "user": "green", "model": "yellow",
+                    "tool_call": "magenta", "tool_result": "blue",
+                }.get(t.role, "white")
+                if t.content:
+                    content = t.content[:80]
+                elif t.tool_calls:
+                    content = json.dumps(t.tool_calls, ensure_ascii=False)[:80]
+                elif t.tool_result:
+                    content = json.dumps(t.tool_result, ensure_ascii=False)[:80]
+                else:
+                    content = ""
+                branch.add(f"[{role_style}][{t.role}][/] {content}")
+
+            # reply message
+            replies = reply_map.get(trigger_id, []) if trigger_id else []
+            for r in replies:
+                reply_text = r.content.get("text", "")[:80]
+                branch.add(f"💬 [bold green]回复:[/] {reply_text}")
+
+        self.console.print(root)
 
     async def _cmd_inspect(self, parts: list[str]) -> None:
         if len(parts) < 2:

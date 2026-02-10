@@ -30,18 +30,23 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from tyrant_core.models import (
+    ConversationTurn,
+    Delegation,
     Endpoint,
     Event,
     Message,
     Node,
     NodeStatus,
     NodeType,
-    Permissions,
+    Permission,
+    PermissionEffect,
     Priority,
     Reference,
     RefType,
     Relation,
     RelationType,
+    Scope,
+    ScopeType,
     Task,
     TaskStatus,
 )
@@ -94,6 +99,7 @@ messages_table = Table(
     Column("thread_id", String, nullable=True),
     Column("requires_ack", Integer, nullable=False, default=0),
     Index("idx_messages_to", "to_node"),
+    Index("idx_messages_from", "from_node"),
     Index("idx_messages_thread", "thread_id"),
 )
 
@@ -115,11 +121,13 @@ tasks_table = Table(
     Column("participants", JSON, nullable=False, default=[]),
     Column("status", String, nullable=False, default="PENDING"),
     Column("content", JSON, nullable=False, default={}),
+    Column("result", JSON, nullable=False, default={}),
     Column("parent_task", String, nullable=True),
     Column("references_json", JSON, nullable=False, default=[]),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
     Index("idx_tasks_assignee", "assignee"),
+    Index("idx_tasks_creator", "creator"),
     Index("idx_tasks_status", "status"),
 )
 
@@ -133,6 +141,36 @@ events_table = Table(
     Column("data", JSON, nullable=False, default={}),
     Index("idx_events_timestamp", "timestamp"),
     Index("idx_events_type", "type"),
+)
+
+delegations_table = Table(
+    "delegations",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("delegator", String, nullable=False),
+    Column("delegate", String, nullable=False),
+    Column("action", String, nullable=False),
+    Column("scope", JSON, nullable=False),
+    Column("one_time", Integer, nullable=False, default=0),
+    Column("expires_at", String, nullable=True),
+    Column("created_at", String, nullable=False),
+    Index("idx_delegations_delegate", "delegate"),
+    Index("idx_delegations_delegator", "delegator"),
+)
+
+conversation_turns_table = Table(
+    "conversation_turns",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("node_id", String, nullable=False),
+    Column("role", String, nullable=False),
+    Column("content", Text, nullable=False, default=""),
+    Column("tool_calls", JSON, nullable=False, default=[]),
+    Column("tool_result", JSON, nullable=False, default={}),
+    Column("trigger_message_id", String, nullable=True),
+    Column("timestamp", String, nullable=False),
+    Index("idx_turns_node_id", "node_id"),
+    Index("idx_turns_trigger", "trigger_message_id"),
 )
 
 subscriptions_table = Table(
@@ -165,13 +203,19 @@ def _node_to_row(node: Node) -> dict[str, Any]:
         "is_owner": int(node.is_owner),
         "endpoint": node.endpoint.model_dump(),
         "status": node.status.value,
-        "permissions": node.permissions.model_dump(),
+        "permissions": [p.model_dump() for p in node.permissions],
         "metadata_": node.metadata,
         "created_at": _dt_to_str(node.created_at),
     }
 
 
 def _row_to_node(row: Any) -> Node:
+    perms_raw = row.permissions or []
+    # v3: permissions 是 JSON 数组
+    if isinstance(perms_raw, dict):
+        perms = []  # v1 旧格式兼容：忽略旧 bool 权限
+    else:
+        perms = [Permission(**p) for p in perms_raw]
     return Node(
         id=row.id,
         type=NodeType(row.type),
@@ -179,7 +223,7 @@ def _row_to_node(row: Any) -> Node:
         is_owner=bool(row.is_owner),
         endpoint=Endpoint(**row.endpoint),
         status=NodeStatus(row.status),
-        permissions=Permissions(**row.permissions),
+        permissions=perms,
         metadata=row.metadata_,
         created_at=_str_to_dt(row.created_at),  # type: ignore[arg-type]
     )
@@ -256,6 +300,7 @@ def _task_to_row(task: Task) -> dict[str, Any]:
         "participants": task.participants,
         "status": task.status.value,
         "content": task.content,
+        "result": task.result,
         "parent_task": task.parent_task,
         "references_json": [r.model_dump() for r in task.references],
         "created_at": _dt_to_str(task.created_at),
@@ -279,10 +324,63 @@ def _row_to_task(row: Any) -> Task:
         participants=row.participants or [],
         status=TaskStatus(row.status),
         content=row.content,
+        result=row.result or {},
         parent_task=row.parent_task,
         references=refs,
         created_at=_str_to_dt(row.created_at),  # type: ignore[arg-type]
         updated_at=_str_to_dt(row.updated_at),  # type: ignore[arg-type]
+    )
+
+
+def _delegation_to_row(d: Delegation) -> dict[str, Any]:
+    return {
+        "id": d.id,
+        "delegator": d.delegator,
+        "delegate": d.delegate,
+        "action": d.action,
+        "scope": d.scope.model_dump(),
+        "one_time": int(d.one_time),
+        "expires_at": _dt_to_str(d.expires_at),
+        "created_at": _dt_to_str(d.created_at),
+    }
+
+
+def _row_to_delegation(row: Any) -> Delegation:
+    return Delegation(
+        id=row.id,
+        delegator=row.delegator,
+        delegate=row.delegate,
+        action=row.action,
+        scope=Scope(**row.scope),
+        one_time=bool(row.one_time),
+        expires_at=_str_to_dt(row.expires_at),
+        created_at=_str_to_dt(row.created_at),  # type: ignore[arg-type]
+    )
+
+
+def _turn_to_row(turn: ConversationTurn) -> dict[str, Any]:
+    return {
+        "id": turn.id,
+        "node_id": turn.node_id,
+        "role": turn.role,
+        "content": turn.content,
+        "tool_calls": turn.tool_calls,
+        "tool_result": turn.tool_result,
+        "trigger_message_id": turn.trigger_message_id,
+        "timestamp": _dt_to_str(turn.timestamp),
+    }
+
+
+def _row_to_turn(row: Any) -> ConversationTurn:
+    return ConversationTurn(
+        id=row.id,
+        node_id=row.node_id,
+        role=row.role,
+        content=row.content or "",
+        tool_calls=row.tool_calls or [],
+        tool_result=row.tool_result or {},
+        trigger_message_id=row.trigger_message_id,
+        timestamp=_str_to_dt(row.timestamp),  # type: ignore[arg-type]
     )
 
 
@@ -367,7 +465,14 @@ class SqliteStore(Store):
             elif key == "endpoint":
                 values["endpoint"] = val.model_dump() if hasattr(val, "model_dump") else val
             elif key == "permissions":
-                values["permissions"] = val.model_dump() if hasattr(val, "model_dump") else val
+                # v3: permissions 是 list[Permission]
+                if isinstance(val, list):
+                    values["permissions"] = [
+                        p.model_dump() if hasattr(p, "model_dump") else p
+                        for p in val
+                    ]
+                else:
+                    values["permissions"] = val
             elif key == "status":
                 values["status"] = val.value if hasattr(val, "value") else val
             elif key == "type":
@@ -503,6 +608,33 @@ class SqliteStore(Store):
         )
         return [_row_to_message(row) for row in result.fetchall()]
 
+    async def query_messages(
+        self,
+        node_id: str | None = None,
+        from_node: str | None = None,
+        to_node: str | None = None,
+        type: str | None = None,
+        limit: int = 50,
+    ) -> list[Message]:
+        session = self._session()
+        stmt = select(messages_table)
+        if node_id:
+            stmt = stmt.where(
+                or_(
+                    messages_table.c.from_node == node_id,
+                    messages_table.c.to_node == node_id,
+                )
+            )
+        if from_node:
+            stmt = stmt.where(messages_table.c.from_node == from_node)
+        if to_node:
+            stmt = stmt.where(messages_table.c.to_node == to_node)
+        if type:
+            stmt = stmt.where(messages_table.c.type == type)
+        stmt = stmt.order_by(messages_table.c.timestamp.desc()).limit(limit)
+        result = await session.execute(stmt)
+        return [_row_to_message(row) for row in result.fetchall()]
+
     async def mark_delivered(self, message_id: str, node_id: str) -> None:
         session = self._session()
         now = _dt_to_str(datetime.now(timezone.utc))
@@ -618,7 +750,74 @@ class SqliteStore(Store):
         result = await session.execute(stmt)
         return [_row_to_task(row) for row in result.fetchall()]
 
-    # ── Event ──────────────────────────────────────────────────────────────
+    # ── Delegation ───────────────────────────────────────────────────────────────
+
+    async def save_delegation(self, delegation: Delegation) -> None:
+        session = self._session()
+        await session.execute(
+            insert(delegations_table).values(**_delegation_to_row(delegation))
+        )
+
+    async def get_delegation(self, delegation_id: str) -> Delegation | None:
+        session = self._session()
+        result = await session.execute(
+            select(delegations_table).where(delegations_table.c.id == delegation_id)
+        )
+        row = result.first()
+        return _row_to_delegation(row) if row else None
+
+    async def delete_delegation(self, delegation_id: str) -> None:
+        session = self._session()
+        await session.execute(
+            delete(delegations_table).where(delegations_table.c.id == delegation_id)
+        )
+
+    async def get_delegations_for_delegate(
+        self, delegate_id: str, action: str | None = None,
+    ) -> list[Delegation]:
+        session = self._session()
+        stmt = select(delegations_table).where(
+            delegations_table.c.delegate == delegate_id
+        )
+        if action:
+            stmt = stmt.where(
+                or_(
+                    delegations_table.c.action == action,
+                    delegations_table.c.action == "*",
+                )
+            )
+        result = await session.execute(stmt)
+        return [_row_to_delegation(row) for row in result.fetchall()]
+
+    # ── ConversationTurn ───────────────────────────────────────────────────────
+
+    async def save_conversation_turn(self, turn: ConversationTurn) -> None:
+        session = self._session()
+        await session.execute(
+            insert(conversation_turns_table).values(**_turn_to_row(turn))
+        )
+
+    async def query_conversation_turns(
+        self,
+        node_id: str,
+        trigger_message_id: str | None = None,
+        limit: int = 50,
+    ) -> list[ConversationTurn]:
+        session = self._session()
+        stmt = select(conversation_turns_table).where(
+            conversation_turns_table.c.node_id == node_id
+        )
+        if trigger_message_id:
+            stmt = stmt.where(
+                conversation_turns_table.c.trigger_message_id == trigger_message_id
+            )
+        stmt = stmt.order_by(
+            conversation_turns_table.c.timestamp.asc()
+        ).limit(limit)
+        result = await session.execute(stmt)
+        return [_row_to_turn(row) for row in result.fetchall()]
+
+    # ── Event ─────────────────────────────────────────────────────────────────────
 
     async def append_event(self, event: Event) -> None:
         session = self._session()

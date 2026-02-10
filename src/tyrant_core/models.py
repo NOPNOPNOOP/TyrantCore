@@ -50,7 +50,19 @@ class RefType(str, Enum):
     NODE = "NODE"
 
 
-# ── 嵌套结构 ───────────────────────────────────────────────────────────────
+class ScopeType(str, Enum):
+    SELF_SUBTREE = "self_subtree"  # 自身子树
+    GLOBAL = "global"              # 全局
+    SUBTREES = "subtrees"          # 指定节点的子树内
+    NODES = "nodes"                # 精确到指定节点
+
+
+class PermissionEffect(str, Enum):
+    ALLOW = "allow"
+    DENY = "deny"
+
+
+# ── 嵌套结构 ─────────────────────────────────────────────────────────────
 
 
 class Endpoint(BaseModel):
@@ -59,12 +71,15 @@ class Endpoint(BaseModel):
     config: dict = {}  # 适配器特有配置
 
 
-class Permissions(BaseModel):
-    create_agent: bool = False
-    destroy_agent: bool = False
-    recruit: bool = False
-    audit: bool = False
-    grant_permission: bool = False
+class Scope(BaseModel):
+    type: ScopeType = ScopeType.SELF_SUBTREE
+    targets: list[str] = []  # 仅 SUBTREES / NODES 时使用
+
+
+class Permission(BaseModel):
+    action: str  # "create_agent" / "audit" / "*" / ...
+    effect: PermissionEffect = PermissionEffect.ALLOW
+    scope: Scope = Field(default_factory=Scope)
 
 
 class Reference(BaseModel):
@@ -83,7 +98,7 @@ class Node(BaseModel):
     is_owner: bool = False
     endpoint: Endpoint
     status: NodeStatus = NodeStatus.OFFLINE
-    permissions: Permissions = Field(default_factory=Permissions)
+    permissions: list[Permission] = []  # v3: 显式作用域权限列表
     metadata: dict = {}
     created_at: datetime
 
@@ -122,10 +137,33 @@ class Task(BaseModel):
     participants: list[str] = []
     status: TaskStatus = TaskStatus.PENDING
     content: dict = {}
+    result: dict = {}  # 执行结果（完成者填写）
     parent_task: str | None = None
     references: list[Reference] = []
     created_at: datetime
     updated_at: datetime
+
+
+class Delegation(BaseModel):
+    id: str  # uuid4
+    delegator: str  # 谁授权
+    delegate: str  # 谁被授权
+    action: str  # 授权的动作
+    scope: Scope
+    one_time: bool = False
+    expires_at: datetime | None = None
+    created_at: datetime
+
+
+class ConversationTurn(BaseModel):
+    id: str  # uuid4
+    node_id: str  # 所属 agent
+    role: str  # "user" | "model" | "tool_call" | "tool_result"
+    content: str = ""  # 文本内容
+    tool_calls: list[dict] = []  # role=model 时：[{name, args}]
+    tool_result: dict = {}  # role=tool_result 时：{name, result}
+    trigger_message_id: str | None = None  # 触发的 TyrantCore Message ID
+    timestamp: datetime
 
 
 class Event(BaseModel):

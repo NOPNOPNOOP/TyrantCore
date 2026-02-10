@@ -397,6 +397,8 @@ Task:
 
 ### 权限模型
 
+> **注意：以下为 v1 权限模型，v3 已重新设计，见末尾「v3 演进」章节。**
+
 权限挂在节点上，由上级授予，可下放。Tyrant 天生拥有全部权限。
 
 权限作用域固定为节点自身的子树。Tyrant 的子树即整个网络，因此等效于全局。
@@ -682,3 +684,191 @@ IM 适配器的职责：
 1. 技术选型最终确定
 2. 并发控制具体方案（乐观锁？原子操作？）
 3. 存储方案细化（SQLite vs 纯文件 vs 混合）
+
+---
+
+## v2 演进：递归任务分解
+
+### 使用场景
+
+Tyrant 向初始默认节点说一句话 → 该节点自动拆解任务、创建/招募人员、分配任务。如果子节点不需要继续分解则自己执行，否则继续递归。
+
+### 基础设施层改动
+
+以下是 TyrantCore 基础设施本身的能力增强，与具体业务场景无关：
+
+**1. Task 结果字段**
+Task 模型新增 `result: object`，完成者附上执行结果。
+
+**2. Task 完成自动通知（混合方案）**
+- Task 管"做什么/做完没"——结构化骨架，系统可追踪
+- Message 管过程中的沟通——灵活，不受约束
+- `update_task(status=COMPLETED)` → EventBus 事件 `task.completed` → 系统自动给 Task 创建者发 Message（带 task_id + result）
+
+**3. Task 查询 tool**
+Agent 可通过 tool 查询自己创建的/分配给自己的 Task 及状态，减轻 LLM 的记忆负担。Agent 不靠 context 记"我在等谁"，随时可查。
+
+### 默认预设层
+
+以下是基于基础设施之上的默认配置/行为，可替换、可定制：
+
+**4. 初始默认节点**
+启动时自动创建一个"首席助手"节点作为 Tyrant 的直接下级。这是默认行为，不是基础设施约束——用户可以选择不创建或替换为其他节点。
+
+**5. Agent system prompt（递归分解指导）**
+默认 prompt 指导递归分解逻辑：能做就做，不能做就拆分（create_agent/recruit + 创建子 Task + 发消息下发），等结果汇总上报。这是 Agent 层的默认行为，不是基础设施强制的。
+
+### Agent 执行模型（不变）
+
+保持现有串行 inbox 处理。Agent 的 inbox 是 queue，消息按顺序处理，ADK session 保持对话上下文。LLM 通过 session 历史 + Task 查询 tool 理解当前状态，决定如何反应（回复中间问题、记录完成通知、汇总上报）。
+
+---
+
+## v3 演进：权限重设计 + 委托机制
+
+驱动场景：共享服务型节点（如 Agent Creator）需要跨子树操作。v1 的 bool 权限 + 固定子树作用域无法支持。
+
+### 显式作用域权限模型
+
+权限从 bool 变为带作用域和效果的对象列表：
+
+```yaml
+Permission:
+  action: string           # "create_agent" / "audit" / "*" / ...
+  effect: "allow" | "deny"
+  scope:
+    type: "self_subtree" | "global" | "subtrees" | "nodes"
+    targets: list[string]  # 仅 subtrees/nodes 时使用
+```
+
+节点的 permissions 为 Permission 列表，通过多条条目实现组合。
+
+**scope 类型：**
+- `self_subtree` — 自身子树（v1 行为）
+- `global` — 全局
+- `subtrees: [A, B]` — A 和 B 的整棵子树内
+- `nodes: [A, B]` — 精确到 A 和 B 这两个节点
+
+**检查流程（deny 优先）：**
+1. 收集节点自身 permissions + 收到的 delegations 中所有匹配 action 的条目
+2. 任何 deny 命中目标 → 拒绝
+3. 任何 allow 命中目标 → 放行
+4. 都没命中 → 拒绝
+
+Tyrant 隐含 `Permission(action="*", effect="allow", scope=global)`，不需显式存储。
+
+### 委托机制 (Delegation)
+
+临时/持久的授权转移，支持跨子树操作：
+
+```yaml
+Delegation:
+  id: string
+  delegator: string        # 谁授权
+  delegate: string         # 谁被授权
+  action: string           # 授权的动作
+  scope:                   # 不能超出 delegator 自身权限范围
+    type: string
+    targets: list[string]
+  one_time: bool           # 一次性还是持久
+  expires_at: datetime     # 过期时间（可空）
+```
+
+**约束：**
+- 不可再委托：A 委托给 B，B 不能把这个委托转给 C
+- 委托范围 ≤ 委托者自身权限范围
+
+**典型场景：**
+Agent A 想让 Agent Creator 帮自己建 agent → A 创建 delegation(delegate=Creator, action="create_agent", scope=nodes:[A]) → Creator 拿着委托调 create_agent(parent_id=A)
+
+---
+
+## v3.5 演进：消息查询 + Agent 对话历史可观测性
+
+驱动场景：节点的收发消息需要可查询，Agent 内部的 LLM 对话历史（输入/输出/tool call）需要可观测。
+
+### 框架解耦原则
+
+对话历史不从 Agent 框架（如 ADK）的 session 中读取，而是由 runtime 写入我们自己的 store：
+
+```
+查询侧：  SystemAPI → Store                 ← 不碰框架
+写入侧：  Runtime → ADK events → Store      ← 唯一耦合点
+```
+
+换框架只改 runtime 的 event 提取逻辑，查询侧零改动。
+
+### 回复机制：Auto-reply
+
+Agent 收到消息后经过 ReAct 过程，LLM 的最终文本输出**自动作为回复 Message 发送给原消息发送者**。
+
+这是默认的回复通道，类似聊天软件——你给我发消息，我的回复自然回给你，不需要额外操作。
+
+- `send_message` tool 用于**主动联系其他节点**（下发任务、跨节点协调），不用于回复当前消息发送者
+- 回复 Message 通过 `references` 中的 `reply_to` 关联原消息
+- 系统不做「已发送检测」——Agent 通过 system prompt 理解这个机制，自然回答即可
+
+### ConversationTurn
+
+Agent 内部 LLM 交互的**过程记录**，只记录 ReAct 思考链，不记录最终回复：
+
+```yaml
+ConversationTurn:
+  id: string
+  node_id: string               # 所属 agent
+  role: string                  # "user" | "tool_call" | "tool_result" | "model"(仅中间思考)
+  content: string               # 文本内容
+  tool_calls: list[object]      # role=tool_call 时：[{name, args}]
+  tool_result: object           # role=tool_result 时：{name, result}
+  trigger_message_id: string    # 触发的 TyrantCore Message ID（可空）
+  timestamp: datetime
+```
+
+**与 Message 的关系（无重复）：**
+- **ConversationTurn** 记录 Agent 的思考过程（输入 + ReAct 中间步骤）
+- **Message** 记录实际通信（收到的消息 + 发出的回复）
+- LLM 的最终回复（`is_final_response`）**不写 turn**，它直接成为回复 Message
+- 中间 model 文本（tool call 之间的思考）仍记录为 turn
+- turn 序列：`user → [tool_call → tool_result]* → (可选的中间 model 思考)`
+- 通过 `trigger_message_id` 关联：一条 Message 触发一组 turn + 一条回复 Message
+
+### 展示模型：以消息为锚点的分组视图
+
+展示层按 `trigger_message_id` 分组，以收到的消息为锚点，挂载 ReAct 过程和回复：
+
+```
+📨 tyrant → 首席助手: "帮我查任务" (12:00:00)
+  ├─ 🔧 query_tasks({assignee: ...})
+  ├─ 📎 {tasks: [...]}
+  └─ 💬 首席助手 → tyrant: "这是你的任务列表：..." (reply)
+
+📨 tyrant → 首席助手: "你好" (12:00:10)
+  └─ 💬 首席助手 → tyrant: "你好，有什么需要？" (reply)
+```
+
+**查询 API 保持原子化（展示层自行组装）：**
+- `query_messages` 查消息列表
+- `query_conversation_turns(trigger_message_id=xxx)` 查关联的 turns
+- 展示层拉消息 → 按 trigger 拉 turns → 找到 reply_to 的回复 → 组装树状视图
+- 符合基础设施哲学：基础设施提供数据和关联，展示层自行决定呈现方式
+
+### 消息查询 API
+
+支持查询节点的收发消息记录：
+
+```
+query_messages(node_id, from_node, to_node, type, limit)
+```
+
+- `node_id`：节点参与的所有消息（from OR to 匹配）
+- 可组合过滤：`from_node`、`to_node`、`type`
+
+### 权限控制
+
+消息查询和对话历史查询复用 audit 权限模型：
+
+| 场景 | 权限 |
+|------|------|
+| 查自己的消息/对话历史 | 始终允许 |
+| 查直接下属的 | 隐含允许（上级权限） |
+| 查其他节点的 | 需要 audit 权限（对目标节点） |

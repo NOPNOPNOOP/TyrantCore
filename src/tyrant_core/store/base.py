@@ -7,7 +7,15 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import AsyncContextManager, AsyncIterator
 
-from tyrant_core.models import Event, Message, Node, Relation, Task
+from tyrant_core.models import (
+    ConversationTurn,
+    Delegation,
+    Event,
+    Message,
+    Node,
+    Relation,
+    Task,
+)
 
 
 class Store(ABC):
@@ -78,6 +86,18 @@ class Store(ABC):
     @abstractmethod
     async def mark_acked(self, message_id: str, node_id: str) -> None: ...
 
+    @abstractmethod
+    async def query_messages(
+        self,
+        node_id: str | None = None,
+        from_node: str | None = None,
+        to_node: str | None = None,
+        type: str | None = None,
+        limit: int = 50,
+    ) -> list[Message]:
+        """多条件查询消息。node_id 匹配 from 或 to。按 timestamp DESC。"""
+        ...
+
     # ── Task ───────────────────────────────────────────────────────────────
 
     @abstractmethod
@@ -92,7 +112,40 @@ class Store(ABC):
     @abstractmethod
     async def query_tasks(self, **filters) -> list[Task]: ...
 
-    # ── Event ──────────────────────────────────────────────────────────────
+    # ── Delegation ───────────────────────────────────────────────────────────────
+
+    @abstractmethod
+    async def save_delegation(self, delegation: Delegation) -> None: ...
+
+    @abstractmethod
+    async def get_delegation(self, delegation_id: str) -> Delegation | None: ...
+
+    @abstractmethod
+    async def delete_delegation(self, delegation_id: str) -> None: ...
+
+    @abstractmethod
+    async def get_delegations_for_delegate(
+        self, delegate_id: str, action: str | None = None,
+    ) -> list[Delegation]:
+        """获取某节点收到的所有委托，可按 action 过滤。"""
+        ...
+
+    # ── ConversationTurn ───────────────────────────────────────────────────────
+
+    @abstractmethod
+    async def save_conversation_turn(self, turn: ConversationTurn) -> None: ...
+
+    @abstractmethod
+    async def query_conversation_turns(
+        self,
+        node_id: str,
+        trigger_message_id: str | None = None,
+        limit: int = 50,
+    ) -> list[ConversationTurn]:
+        """查询节点的对话历史。按 timestamp ASC。"""
+        ...
+
+    # ── Event ───────────────────────────────────────────────────────────────────
 
     @abstractmethod
     async def append_event(self, event: Event) -> None: ...

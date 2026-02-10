@@ -6,18 +6,23 @@ import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from tyrant_core.models import (
+    ConversationTurn,
+    Delegation,
     Endpoint,
     Event,
     Message,
     Node,
     NodeStatus,
     NodeType,
-    Permissions,
+    Permission,
+    PermissionEffect,
     Priority,
     Reference,
     RefType,
     Relation,
     RelationType,
+    Scope,
+    ScopeType,
     Task,
     TaskStatus,
 )
@@ -267,6 +272,31 @@ class TestTaskCRUD:
             got = await store.get_task("t1")
         assert got.status == TaskStatus.IN_PROGRESS
 
+    async def test_task_result_field(self, store: SqliteStore):
+        task = Task(
+            id="t1", creator="boss", assignee="worker",
+            content={"title": "Test"}, result={"output": "done"},
+            created_at=NOW, updated_at=NOW,
+        )
+        async with store.transaction():
+            await store.save_task(task)
+        async with store.transaction():
+            got = await store.get_task("t1")
+        assert got.result == {"output": "done"}
+
+    async def test_update_task_result(self, store: SqliteStore):
+        task = Task(
+            id="t1", creator="boss", assignee="worker",
+            content={}, created_at=NOW, updated_at=NOW,
+        )
+        async with store.transaction():
+            await store.save_task(task)
+        async with store.transaction():
+            await store.update_task("t1", result={"output": "hello"})
+        async with store.transaction():
+            got = await store.get_task("t1")
+        assert got.result == {"output": "hello"}
+
     async def test_query_tasks(self, store: SqliteStore):
         async with store.transaction():
             await store.save_task(Task(
@@ -287,8 +317,259 @@ class TestTaskCRUD:
             by_assignee = await store.query_tasks(assignee="w2")
             assert len(by_assignee) == 1
 
+    async def test_query_tasks_by_creator(self, store: SqliteStore):
+        async with store.transaction():
+            await store.save_task(Task(
+                id="t1", creator="a", assignee="w1",
+                content={}, created_at=NOW, updated_at=NOW,
+            ))
+            await store.save_task(Task(
+                id="t2", creator="b", assignee="w2",
+                content={}, created_at=NOW, updated_at=NOW,
+            ))
 
-# ── Event CRUD ─────────────────────────────────────────────────────────────
+        async with store.transaction():
+            by_creator = await store.query_tasks(creator="a")
+        assert len(by_creator) == 1
+        assert by_creator[0].id == "t1"
+
+
+# ── Delegation CRUD ────────────────────────────────────────────────────────────
+
+
+class TestDelegationCRUD:
+    async def test_save_and_get(self, store: SqliteStore):
+        d = Delegation(
+            id="d1", delegator="boss", delegate="worker",
+            action="create_agent",
+            scope=Scope(type=ScopeType.SELF_SUBTREE),
+            created_at=NOW,
+        )
+        async with store.transaction():
+            await store.save_delegation(d)
+        async with store.transaction():
+            got = await store.get_delegation("d1")
+        assert got is not None
+        assert got.delegator == "boss"
+        assert got.action == "create_agent"
+        assert got.scope.type == ScopeType.SELF_SUBTREE
+
+    async def test_delete_delegation(self, store: SqliteStore):
+        d = Delegation(
+            id="d1", delegator="boss", delegate="worker",
+            action="audit", scope=Scope(type=ScopeType.GLOBAL),
+            created_at=NOW,
+        )
+        async with store.transaction():
+            await store.save_delegation(d)
+            await store.delete_delegation("d1")
+        async with store.transaction():
+            got = await store.get_delegation("d1")
+        assert got is None
+
+    async def test_get_delegations_for_delegate(self, store: SqliteStore):
+        async with store.transaction():
+            await store.save_delegation(Delegation(
+                id="d1", delegator="boss", delegate="w1",
+                action="create_agent", scope=Scope(type=ScopeType.SELF_SUBTREE),
+                created_at=NOW,
+            ))
+            await store.save_delegation(Delegation(
+                id="d2", delegator="boss", delegate="w1",
+                action="audit", scope=Scope(type=ScopeType.GLOBAL),
+                created_at=NOW,
+            ))
+            await store.save_delegation(Delegation(
+                id="d3", delegator="boss", delegate="w2",
+                action="create_agent", scope=Scope(type=ScopeType.GLOBAL),
+                created_at=NOW,
+            ))
+
+        async with store.transaction():
+            all_w1 = await store.get_delegations_for_delegate("w1")
+            assert len(all_w1) == 2
+
+            ca_w1 = await store.get_delegations_for_delegate("w1", action="create_agent")
+            assert len(ca_w1) == 1
+            assert ca_w1[0].id == "d1"
+
+    async def test_node_permissions_roundtrip(self, store: SqliteStore):
+        """v3 权限列表序列化/反序列化。"""
+        perms = [
+            Permission(
+                action="create_agent",
+                effect=PermissionEffect.ALLOW,
+                scope=Scope(type=ScopeType.SELF_SUBTREE),
+            ),
+            Permission(
+                action="audit",
+                effect=PermissionEffect.DENY,
+                scope=Scope(type=ScopeType.NODES, targets=["node-x"]),
+            ),
+        ]
+        node = _make_node("n1", permissions=perms)
+        async with store.transaction():
+            await store.save_node(node)
+        async with store.transaction():
+            got = await store.get_node("n1")
+        assert len(got.permissions) == 2
+        assert got.permissions[0].action == "create_agent"
+        assert got.permissions[0].effect == PermissionEffect.ALLOW
+        assert got.permissions[1].action == "audit"
+        assert got.permissions[1].effect == PermissionEffect.DENY
+        assert got.permissions[1].scope.targets == ["node-x"]
+
+
+# ── Message Query ─────────────────────────────────────────────────────────────
+
+
+class TestMessageQuery:
+    async def test_query_by_node_id(self, store: SqliteStore):
+        """node_id 匹配 from 或 to。"""
+        async with store.transaction():
+            await store.save_message(Message(
+                id="m1", timestamp=NOW, from_node="a", to="b",
+                content={"text": "hello"},
+            ))
+            await store.save_message(Message(
+                id="m2", timestamp=NOW, from_node="b", to="a",
+                content={"text": "reply"},
+            ))
+            await store.save_message(Message(
+                id="m3", timestamp=NOW, from_node="c", to="d",
+                content={"text": "other"},
+            ))
+
+        async with store.transaction():
+            msgs = await store.query_messages(node_id="a")
+        assert len(msgs) == 2
+        assert {m.id for m in msgs} == {"m1", "m2"}
+
+    async def test_query_by_from_node(self, store: SqliteStore):
+        async with store.transaction():
+            await store.save_message(Message(
+                id="m1", timestamp=NOW, from_node="a", to="b",
+            ))
+            await store.save_message(Message(
+                id="m2", timestamp=NOW, from_node="b", to="a",
+            ))
+
+        async with store.transaction():
+            msgs = await store.query_messages(from_node="a")
+        assert len(msgs) == 1
+        assert msgs[0].id == "m1"
+
+    async def test_query_by_type(self, store: SqliteStore):
+        async with store.transaction():
+            await store.save_message(Message(
+                id="m1", timestamp=NOW, from_node="a", to="b", type="CHAT",
+            ))
+            await store.save_message(Message(
+                id="m2", timestamp=NOW, from_node="a", to="b", type="NOTIFICATION",
+            ))
+
+        async with store.transaction():
+            msgs = await store.query_messages(node_id="a", type="CHAT")
+        assert len(msgs) == 1
+        assert msgs[0].id == "m1"
+
+    async def test_query_limit(self, store: SqliteStore):
+        async with store.transaction():
+            for i in range(5):
+                await store.save_message(Message(
+                    id=f"m{i}",
+                    timestamp=NOW + timedelta(seconds=i),
+                    from_node="a", to="b",
+                ))
+
+        async with store.transaction():
+            msgs = await store.query_messages(node_id="a", limit=3)
+        assert len(msgs) == 3
+        # DESC 排序，最新的在前
+        assert msgs[0].id == "m4"
+
+
+# ── ConversationTurn CRUD ─────────────────────────────────────────────────
+
+
+class TestConversationTurnCRUD:
+    async def test_save_and_query(self, store: SqliteStore):
+        turn = ConversationTurn(
+            id="t1", node_id="agent1", role="user",
+            content="hello", trigger_message_id="m1", timestamp=NOW,
+        )
+        async with store.transaction():
+            await store.save_conversation_turn(turn)
+        async with store.transaction():
+            turns = await store.query_conversation_turns("agent1")
+        assert len(turns) == 1
+        assert turns[0].id == "t1"
+        assert turns[0].role == "user"
+        assert turns[0].content == "hello"
+        assert turns[0].trigger_message_id == "m1"
+
+    async def test_query_by_trigger(self, store: SqliteStore):
+        async with store.transaction():
+            await store.save_conversation_turn(ConversationTurn(
+                id="t1", node_id="a", role="user",
+                content="q1", trigger_message_id="m1", timestamp=NOW,
+            ))
+            await store.save_conversation_turn(ConversationTurn(
+                id="t2", node_id="a", role="model",
+                content="a1", trigger_message_id="m1", timestamp=NOW,
+            ))
+            await store.save_conversation_turn(ConversationTurn(
+                id="t3", node_id="a", role="user",
+                content="q2", trigger_message_id="m2", timestamp=NOW,
+            ))
+
+        async with store.transaction():
+            turns = await store.query_conversation_turns("a", trigger_message_id="m1")
+        assert len(turns) == 2
+        assert {t.id for t in turns} == {"t1", "t2"}
+
+    async def test_tool_calls_roundtrip(self, store: SqliteStore):
+        turn = ConversationTurn(
+            id="t1", node_id="a", role="tool_call",
+            tool_calls=[{"name": "send_message", "args": {"to": "b"}}],
+            timestamp=NOW,
+        )
+        async with store.transaction():
+            await store.save_conversation_turn(turn)
+        async with store.transaction():
+            turns = await store.query_conversation_turns("a")
+        assert turns[0].tool_calls == [{"name": "send_message", "args": {"to": "b"}}]
+
+    async def test_tool_result_roundtrip(self, store: SqliteStore):
+        turn = ConversationTurn(
+            id="t1", node_id="a", role="tool_result",
+            tool_result={"name": "send_message", "result": {"sent": 1}},
+            timestamp=NOW,
+        )
+        async with store.transaction():
+            await store.save_conversation_turn(turn)
+        async with store.transaction():
+            turns = await store.query_conversation_turns("a")
+        assert turns[0].tool_result == {"name": "send_message", "result": {"sent": 1}}
+
+    async def test_query_limit_and_order(self, store: SqliteStore):
+        async with store.transaction():
+            for i in range(5):
+                await store.save_conversation_turn(ConversationTurn(
+                    id=f"t{i}", node_id="a", role="user",
+                    content=f"msg{i}",
+                    timestamp=NOW + timedelta(seconds=i),
+                ))
+
+        async with store.transaction():
+            turns = await store.query_conversation_turns("a", limit=3)
+        assert len(turns) == 3
+        # ASC 排序，最早的在前
+        assert turns[0].id == "t0"
+        assert turns[2].id == "t2"
+
+
+# ── Event CRUD ─────────────────────────────────────────────────────────────────
 
 
 class TestEventCRUD:

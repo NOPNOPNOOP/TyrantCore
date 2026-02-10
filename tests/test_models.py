@@ -5,18 +5,22 @@ from datetime import datetime, timezone
 import pytest
 
 from tyrant_core.models import (
+    Delegation,
     Endpoint,
     Event,
     Message,
     Node,
     NodeStatus,
     NodeType,
-    Permissions,
+    Permission,
+    PermissionEffect,
     Priority,
     RefType,
     Reference,
     Relation,
     RelationType,
+    Scope,
+    ScopeType,
     Task,
     TaskStatus,
     TyrantError,
@@ -83,13 +87,24 @@ class TestNestedModels:
         ep = Endpoint(protocol="adapter", address="slack-bot", config={"token": "xxx"})
         assert ep.config["token"] == "xxx"
 
-    def test_permissions_defaults(self):
-        perm = Permissions()
-        assert perm.create_agent is False
-        assert perm.destroy_agent is False
-        assert perm.recruit is False
-        assert perm.audit is False
-        assert perm.grant_permission is False
+    def test_scope_defaults(self):
+        scope = Scope()
+        assert scope.type == ScopeType.SELF_SUBTREE
+        assert scope.targets == []
+
+    def test_permission_defaults(self):
+        perm = Permission(action="create_agent")
+        assert perm.effect == PermissionEffect.ALLOW
+        assert perm.scope.type == ScopeType.SELF_SUBTREE
+
+    def test_permission_deny(self):
+        perm = Permission(
+            action="audit",
+            effect=PermissionEffect.DENY,
+            scope=Scope(type=ScopeType.NODES, targets=["node-x"]),
+        )
+        assert perm.effect == PermissionEffect.DENY
+        assert perm.scope.targets == ["node-x"]
 
     def test_reference(self):
         ref = Reference(ref_type=RefType.MESSAGE, ref_id="msg-1", relation="reply_to")
@@ -116,7 +131,7 @@ class TestNode:
         assert node.id == "n1"
         assert node.is_owner is True
         assert node.status == NodeStatus.OFFLINE  # default
-        assert node.permissions.create_agent is False  # default
+        assert node.permissions == []  # v3: empty list
         assert node.metadata == {}
 
     def test_node_serialization(self):
@@ -214,6 +229,21 @@ class TestEvent:
 
 
 # ── 异常 ───────────────────────────────────────────────────────────────────
+
+
+class TestDelegation:
+    def test_create_delegation(self):
+        d = Delegation(
+            id="d1",
+            delegator="boss",
+            delegate="worker",
+            action="create_agent",
+            scope=Scope(type=ScopeType.SELF_SUBTREE),
+            created_at=NOW,
+        )
+        assert d.one_time is False
+        assert d.expires_at is None
+        assert d.scope.type == ScopeType.SELF_SUBTREE
 
 
 class TestExceptions:
