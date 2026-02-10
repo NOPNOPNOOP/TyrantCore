@@ -1,0 +1,32 @@
+[project]
+name = "tyrant-core"
+version = "0.1.0"
+description = "Communication/relationship network infrastructure for AI Agent organizations"
+readme = "README.md"
+authors = [
+    { name = "nopnopnoop", email = "nopnopnoop@foxmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "google-adk",
+    "pydantic>=2.0",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite",
+    "rich",
+    "prompt-toolkit",
+    "structlog",
+    "litellm",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.3,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
