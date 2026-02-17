@@ -42,58 +42,42 @@ src/tyrant_core/
 tests/                    # pytest 测试
 ```
 
-## 架构
+## 架构与模块文档
 
-### 模块依赖图（上层依赖下层，不反向）
+详见 `docs/` 目录：
 
-```
-cli_adapter ──→ system_api
-                   │
-         ┌─────────┼─────────┐
-         ▼         ▼         ▼
-   message_bus  event_bus  agent_runtime
-         │         │         │
-         ▼         ▼         ▼
-        store     store    message_bus
-         │                 event_bus
-         ▼                 adk
-       models
-```
+- [architecture.md](docs/architecture.md) — 架构哲学、核心实体、通信协议、权限模型、模块依赖图
+- [changelog.md](docs/changelog.md) — 版本历史 + 路线图
+- `docs/modules/` — 各模块接口定义：
+  - [models.md](docs/modules/models.md) — 数据模型 + Enum + 异常
+  - [store.md](docs/modules/store.md) — Store ABC + SqliteStore
+  - [message-bus.md](docs/modules/message-bus.md) — 消息总线
+  - [event-bus.md](docs/modules/event-bus.md) — 事件总线
+  - [api.md](docs/modules/api.md) — SystemAPI
+  - [runtime.md](docs/modules/runtime.md) — AgentRuntime + tools + truncation
+  - [cli.md](docs/modules/cli.md) — CLI 适配器
+  - [terminal.md](docs/modules/terminal.md) — 终端子系统
 
-实现顺序遵循此依赖图：models → store → bus → api → runtime → cli。
+修改任何模块前应先阅读对应的模块文档。
 
-### 关键模块职责
+## 关键设计决策
 
-- **models.py** — 零依赖，纯 Pydantic 模型 + Enum + 异常定义
-- **store/** — 抽象 Store ABC + SqliteStore 实现。Pydantic ↔ SQLAlchemy 转换在 Store 内部完成
-- **bus/message_bus.py** — 中心化消息路由，子树可达模型，内存 asyncio.Queue inbox
-- **bus/event_bus.py** — 自建 pub/sub，dict pattern→callbacks，append-only 日志持久化 + replay
-- **api/system_api.py** — 所有对外操作的唯一入口，权限检查在此层完成
-- **runtime/agent_runtime.py** — ADK LlmAgent + Runner.run_async()，将 SystemAPI 暴露为 ADK tools，支持 persistent/per_request 两种 session 模式
-- **adapters/cli.py** — Tyrant（人类）的终端交互入口，启动时自动创建预设节点（首席助手 + agent_creator）
-
-### 核心设计决策
-
-- `Message.from_node` 由系统自动填充，节点不可伪造（安全模型的基础）
-- REPORTS_TO 关系通过原子 API（create_agent / recruit / release）管理，不能单独建立
-- 权限从 bool 变为带作用域的对象列表（Scope: self_subtree / global / subtrees / nodes），Deny 优先
-- Tyrant (is_owner=True) 隐含全部权限
-- EventBus 不做权限检查，信任 SystemAPI 层已验证
-- SQLite 单连接串行化，v1 无额外并发控制
+- `Message.from_node` 由系统自动填充，不可伪造
+- REPORTS_TO 关系通过原子 API 管理，不能单独建立
+- 权限带作用域（Scope），Deny 优先；Tyrant (is_owner=True) 隐含全局权限
 - Node.tags 用于服务发现，list_nodes 支持按 tags 过滤
-- session_mode: persistent（默认，共享 session）/ per_request（每条消息独立 session）
-- clone_node 复制 agent_config + permissions + tags，生成新节点
-- ADK LlmAgent.name 必须是合法标识符（字母/数字/下划线，不能有空格）
+- session_mode: persistent（默认）/ per_request（每条消息独立 session）
+- ADK LlmAgent.name 必须是合法标识符（无空格）
 
 ## 约定
 
 - 所有 ID: uuid4 字符串
 - 时间: UTC datetime，存储为 ISO 8601 字符串
 - bool 存储为 0/1（SQLite）
-- 异步方法统一 async/await，错误通过自定义异常（TyrantError 子类）抛出
-- 日志用 structlog，contextvars 自动绑定 node_id 上下文
-- JSON 字段（dict, list）由 SQLAlchemy JSON 类型自动序列化
-- `Message.from_node` 避开 Python `from` 保留字，序列化时映射为 `"from"`
+- 异步方法统一 async/await，错误通过 TyrantError 子类抛出
+- 日志用 structlog，contextvars 自动绑定 node_id
+- JSON 字段由 SQLAlchemy JSON 类型自动序列化
+- `Message.from_node` 序列化时映射为 `"from"`
 - 代码注释使用中文
 
 ## 配置
@@ -108,12 +92,3 @@ pydantic-settings 管理，配置文件 `~/.config/tyrant_core/.env`，环境变
 - `TYRANT_TERMINAL_*` — 终端会话配置
 
 `config.py` 中 `get_litellm_model()` 在设置了 `api_base` 时自动添加 `openai/` 前缀；`apply_env()` 注入为 `OPENAI_API_KEY` / `OPENAI_API_BASE` 供 LiteLLM 使用。
-
-## 规格文档
-
-完整设计和模块规格在 `docs/` 目录：
-- `docs/design.md` — 完整设计文档（架构哲学、数据模型、通信协议、权限模型）
-- `docs/specs/00-overview.md` — 技术栈、项目结构、启动流程
-- `docs/specs/01-07` — 各模块接口定义和实现骨架
-
-修改任何模块前应先阅读对应的 spec 文档。
