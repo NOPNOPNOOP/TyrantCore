@@ -16,14 +16,14 @@ class Settings(BaseSettings):
     """TyrantCore 全局配置。
 
     读取优先级（高→低）：
-    1. 环境变量 ASA_*
+    1. 环境变量 TYRANT_*
     2. ~/.config/tyrant_core/.env
     3. 默认值
     """
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE),
-        env_prefix="ASA_",
+        env_prefix="TYRANT_",
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
         description="模型 API Base URL（OpenAI 兼容端点）",
     )
 
-    # ── 系统配置 ───────────────────────────────────────────────────────────
+    # ── 系统配置 ───────────────────────────────────────────────────────────────
 
     data_dir: str = Field(
         default="data",
@@ -56,6 +56,47 @@ class Settings(BaseSettings):
     log_level: str = Field(
         default="INFO",
         description="日志级别",
+    )
+
+    # ── Tool 结果截断 ─────────────────────────────────────────────────────────────
+
+    tool_truncate_enabled: bool = Field(
+        default=True,
+        description="启用 tool 结果截断",
+    )
+    tool_truncate_max_lines: int = Field(
+        default=200,
+        description="tool 结果最大行数",
+    )
+    tool_truncate_max_chars: int = Field(
+        default=5000,
+        description="tool 结果最大字符数",
+    )
+
+    # ── 消息输入截断 ────────────────────────────────────────────────────────────
+
+    msg_truncate_enabled: bool = Field(
+        default=True,
+        description="启用消息输入截断",
+    )
+    msg_truncate_max_lines: int = Field(
+        default=200,
+        description="消息输入最大行数",
+    )
+    msg_truncate_max_chars: int = Field(
+        default=5000,
+        description="消息输入最大字符数",
+    )
+
+    # ── 终端会话配置 ───────────────────────────────────────────────────────────
+
+    terminal_idle_timeout: int = Field(
+        default=600,
+        description="终端会话 idle 超时秒数（默认 10 分钟）",
+    )
+    terminal_output_aggregation_ms: int = Field(
+        default=500,
+        description="TerminalNode 输出聚合时间窗口（毫秒）",
     )
 
     def get_litellm_model(self) -> str:

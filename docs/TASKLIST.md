@@ -87,7 +87,7 @@
 - 🧪 测试通过: 75 passed + 手动验证 Tyrant 可达 manager 的下属
 
 ### 10. config.py — 配置系统
-- ✅ pydantic-settings Settings 类 (ASA_* 前缀)
+- ✅ pydantic-settings Settings 类 (TYRANT_* 前缀)
 - ✅ ~/.config/tyrant_core/.env 配置文件
 - ✅ LiteLLM 模型适配 (openai/ 前缀自动添加)
 - ✅ apply_env() 环境变量注入
@@ -231,3 +231,93 @@ TyrantCore 本身的能力增强，与具体业务场景无关：
 - ✅ 更新 e2e 测试: final response 不应出现在 turns 中
 - ✅ reply Message 应包含 reply_to reference
 - 🧹 全部测试: 120 passed（含 12 个端到端测试）
+
+---
+
+## v4 改动计划（终端能力 + Agent 输入管理）
+
+驱动场景：Agent 需要与终端交互（运行命令、使用 Codex/Claude Code），同时超长输入需自动截断保护。
+
+详细设计见 [design.md § v4 演进](design.md#v4-演进终端能力--agent-输入管理)。
+
+### 基础设施层改动
+
+#### 31. 配置前缀迁移
+- ✅ env_prefix ASA_ → TYRANT_
+- ✅ 更新所有文档引用
+
+#### 32. TerminalSession（pty 底层管理）
+- ✅ adapters/terminal.py: TerminalSession 类
+- ✅ pty 创建、async 读写、进程生命周期
+- ✅ session 归属 agent_id，cwd / env 由调用方指定
+- ✅ 生命周期：agent stop 时自动 kill + idle 超时自动 kill
+
+#### 33. 通用 File Tools
+- ✅ file_read(path, start_line, end_line)
+- ✅ file_grep(path, pattern)
+- ✅ 注册为 ADK tools，所有 Agent 可用
+
+#### 34. Agent 输入截断机制
+- ✅ 截断工具函数：truncate_if_needed()
+- ✅ 截断配置: Settings 新增 tool/msg 截断参数（各自可开关）
+- ✅ 调用点 1: after_tool_callback 拦截 tool 返回值
+- ✅ 调用点 2: _format_message_for_adk 拦截消息输入
+- ✅ 超长内容存文件 + 返回尾部截取 + file_read/file_grep 指引
+
+#### 35. Terminal Tools（范式 1）
+- ✅ terminal_start / terminal_read / terminal_write / terminal_signal / terminal_close
+- ✅ 注册为 ADK tools
+- ✅ 输出截断通过 after_tool_callback 复用 #34 机制
+
+#### 36. NodeType.TERMINAL + TerminalNode adapter（范式 2）
+- ✅ models.py: NodeType 新增 TERMINAL
+- ✅ adapters/terminal_node.py: TerminalNode adapter
+- ✅ stdout 按时间窗口聚合 → Message
+- ✅ 收到 Message → stdin
+- ✅ 创建方式: Agent 调 API 动态创建 + 系统预配置
+- ✅ runtime dispatch: 根据 NodeType 走不同处理循环
+
+#### 37. 测试
+- ✅ TerminalSession 单元测试（8 passed）
+- ✅ File tools 单元测试（13 passed）
+- ✅ 截断机制单元测试（8 passed）
+- ✅ Terminal tools 集成测试（9 passed）
+- 🧹 全部测试: 163 passed
+
+---
+
+## v5 改动计划（服务发现 + Agent Creator + 请求级 Session）
+
+驱动场景：需要更强大的 agentic Agent 创建器，支持服务发现、无状态请求处理、节点克隆。
+
+### 基础设施层改动
+
+#### 38. Node.tags + 服务发现
+- ✅ models.py: Node 新增 `tags: list[str]` 字段
+- ✅ store: tags 列（JSON）+ list_nodes 按 tags 过滤
+- ✅ system_api: list_nodes(tags?, type?, status?) 方法
+- ✅ runtime: list_nodes tool
+
+#### 39. session_mode: per_request
+- ✅ agent_config.session_mode: "persistent"（默认）| "per_request"
+- ✅ runtime: persistent 模式复用 session，per_request 每条消息新建临时 session
+- ✅ ConversationTurn 写入不受影响（可观测性保留）
+
+#### 40. clone_node
+- ✅ system_api: clone_node(source_id, parent_id, name?) 复制 agent_config + permissions + tags
+- ✅ runtime: clone_node tool + 自动启动克隆节点
+
+### 预设层
+
+#### 41. Agent Creator 系统服务
+- ✅ 启动时自动创建，tags=["agent_creator"]，session_mode="per_request"
+- ✅ scope=global 的 create_agent + grant_permission 权限
+- ✅ 专用 system prompt（需求分析 → Agent 设计 → 创建 + 配置）
+
+#### 42. 通用 prompt 更新
+- ✅ DEFAULT_INSTRUCTION 加服务发现提示：list_nodes 查找系统服务
+
+#### 43. 测试
+- ✅ list_nodes: 全量查询 + tags 过滤（2 tests）
+- ✅ clone_node: config/permissions/tags 复制 + 自定义名称（2 tests）
+- 🧹 全部测试: 167 passed

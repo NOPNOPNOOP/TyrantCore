@@ -69,6 +69,7 @@ class CliAdapter:
         """主循环：初始化 Tyrant 节点，并行运行输入处理和消息接收。"""
         await self._ensure_tyrant_node()
         await self._ensure_default_agent()
+        await self._ensure_agent_creator()
 
         self.console.print(Panel(
             "TyrantCore v0.1 — 输入 /help 查看命令",
@@ -132,6 +133,68 @@ class CliAdapter:
         self.console.print(
             f"已创建默认助手: {node.name} ({node.id[:12]})",
             style="green",
+        )
+
+    # ── Agent Creator（预设层）─────────────────────────────────────────
+
+    AGENT_CREATOR_TAG = "agent_creator"
+
+    AGENT_CREATOR_INSTRUCTION = """你是 TyrantCore 网络中的 Agent Creator，专门负责设计和创建 Agent。
+
+## 运行模式
+你是无状态服务节点（per_request），每个请求独立处理。
+
+## 回复机制
+- 你的文本回复会**自动发送**给当前消息的发送者，无需手动调用 send_message。
+
+## 核心能力
+当收到创建 Agent 的请求时：
+1. 分析需求，设计合适的 Agent：
+   - 确定 name（简洁有意义）
+   - 设计 instruction（system prompt，明确角色、能力、行为准则）
+   - 确定需要的权限
+2. 调用 create_agent 创建节点（parent_id 由请求者指定，默认为请求者自身）
+3. 如需特殊权限，用 grant_permission 授予
+4. 返回创建结果（node_id、name、配置摘要）
+
+## 设计原则
+- instruction 要具体、可操作，不要空泛
+- 权限最小化：只授予必要的权限
+- 如果请求不明确，先回复确认需求再创建
+"""
+
+    async def _ensure_agent_creator(self) -> None:
+        """预设层：确保 Agent Creator 系统服务节点存在。"""
+        async with self.api.store.transaction():
+            nodes = await self.api.store.list_nodes(tags=[self.AGENT_CREATOR_TAG])
+        if nodes:
+            return  # 已存在
+
+        node = await self.api.create_agent(
+            caller_id=self.tyrant_node_id,
+            name="agent_creator",
+            parent_id=self.tyrant_node_id,
+            agent_config={
+                "instruction": self.AGENT_CREATOR_INSTRUCTION,
+                "session_mode": "per_request",
+            },
+        )
+        # 设置 tags + global 权限
+        async with self.api.store.transaction():
+            await self.api.store.update_node(node.id, tags=[self.AGENT_CREATOR_TAG])
+        await self.api.grant_permission(
+            self.tyrant_node_id, node.id,
+            Permission(action="create_agent", scope=Scope(type=ScopeType.GLOBAL)),
+        )
+        await self.api.grant_permission(
+            self.tyrant_node_id, node.id,
+            Permission(action="grant_permission", scope=Scope(type=ScopeType.GLOBAL)),
+        )
+        if self.runtime:
+            await self.runtime.start_agent(node)
+        self.console.print(
+            f"已创建系统服务: {node.name} ({node.id[:12]})",
+            style="cyan",
         )
 
     # ── 节点 ID 解析 ──────────────────────────────────────────────────────

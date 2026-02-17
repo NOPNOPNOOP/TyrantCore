@@ -652,3 +652,75 @@ class TestAudit:
         result = await api.audit_inspect(caller_id="tyrant", target_id=agent.id)
         assert result["node"]["name"] == "A1"
         assert len(result["relations"]) > 0  # 至少有 REPORTS_TO
+
+
+# ── v5: 节点查询 + 克隆 ──────────────────────────────────────────────────────
+
+
+class TestListNodes:
+    async def test_list_all(self, store: SqliteStore, api: SystemAPI):
+        await _create_tyrant(store)
+        await api.create_agent(caller_id="tyrant", name="A1", parent_id="tyrant")
+        nodes = await api.list_nodes(caller_id="tyrant")
+        assert len(nodes) >= 2  # tyrant + A1
+
+    async def test_filter_by_tags(self, store: SqliteStore, api: SystemAPI):
+        await _create_tyrant(store)
+        agent = await api.create_agent(
+            caller_id="tyrant", name="Svc", parent_id="tyrant",
+        )
+        async with store.transaction():
+            await store.update_node(agent.id, tags=["my_service"])
+
+        found = await api.list_nodes(caller_id="tyrant", tags=["my_service"])
+        assert len(found) == 1
+        assert found[0].id == agent.id
+
+        empty = await api.list_nodes(caller_id="tyrant", tags=["nonexistent"])
+        assert len(empty) == 0
+
+
+class TestCloneNode:
+    async def test_clone_copies_config_and_tags(
+        self, store: SqliteStore, api: SystemAPI,
+    ):
+        await _create_tyrant(store)
+        source = await api.create_agent(
+            caller_id="tyrant", name="Template", parent_id="tyrant",
+            agent_config={"instruction": "do stuff", "session_mode": "per_request"},
+        )
+        # 给 source 加 tags 和 permissions
+        async with store.transaction():
+            await store.update_node(source.id, tags=["worker"])
+        await api.grant_permission(
+            "tyrant", source.id,
+            Permission(action="audit", scope=Scope(type=ScopeType.SELF_SUBTREE)),
+        )
+        # 重新读取 source
+        async with store.transaction():
+            source = await store.get_node(source.id)
+
+        clone = await api.clone_node(
+            caller_id="tyrant", source_id=source.id, parent_id="tyrant",
+        )
+
+        assert clone.name == "Template-clone"
+        assert clone.tags == ["worker"]
+        assert clone.metadata.get("agent_config", {}).get("session_mode") == "per_request"
+        assert any(p.action == "audit" for p in clone.permissions)
+
+        # 验证 REPORTS_TO
+        async with store.transaction():
+            rel = await store.get_reports_to(clone.id)
+        assert rel is not None and rel.node_a == "tyrant"
+
+    async def test_clone_custom_name(self, store: SqliteStore, api: SystemAPI):
+        await _create_tyrant(store)
+        source = await api.create_agent(
+            caller_id="tyrant", name="Base", parent_id="tyrant",
+        )
+        clone = await api.clone_node(
+            caller_id="tyrant", source_id=source.id,
+            parent_id="tyrant", name="CustomName",
+        )
+        assert clone.name == "CustomName"

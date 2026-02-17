@@ -34,6 +34,10 @@ from tyrant_core.api.system_api import SystemAPI
 from tyrant_core.bus.event_bus import EventBus
 from tyrant_core.bus.message_bus import MessageBus
 from tyrant_core.config import Settings, get_settings
+from tyrant_core.adapters.terminal import TerminalSessionManager
+from tyrant_core.runtime.file_tools import build_file_tools
+from tyrant_core.runtime.terminal_tools import build_terminal_tools
+from tyrant_core.runtime.truncation import truncate_if_needed
 
 logger = structlog.get_logger()
 
@@ -41,7 +45,7 @@ APP_NAME = "tyrant_core"
 
 
 class AgentRuntime:
-    """管理 LOCAL_AGENT 的生命周期。"""
+    """管理 LOCAL_AGENT 和 TERMINAL 节点的生命周期。"""
 
     def __init__(
         self,
@@ -57,15 +61,21 @@ class AgentRuntime:
         self._session_service = InMemorySessionService()
         self._agents: dict[str, asyncio.Task] = {}  # node_id → agent_loop task
         self._runners: dict[str, Runner] = {}  # node_id → Runner
+        self._terminal_manager = TerminalSessionManager()
 
     # ── 生命周期 ───────────────────────────────────────────────────────────
 
     async def start_agent(self, node: Node) -> None:
-        """启动一个 Agent（创建 ADK Agent 实例 + 启动 inbox 监听协程）。"""
+        """启动一个 Agent（根据 NodeType dispatch 不同处理循环）。"""
         if node.id in self._agents:
             logger.warning("agent_already_running", node_id=node.id)
             return
 
+        if node.type == NodeType.TERMINAL:
+            await self._start_terminal_node(node)
+            return
+
+        # LOCAL_AGENT: ADK agent loop
         adk_agent = self._create_adk_agent(node)
         runner = self._create_runner(adk_agent)
         self._runners[node.id] = runner
@@ -77,8 +87,46 @@ class AgentRuntime:
         self._agents[node.id] = task
         logger.info("agent_started", node_id=node.id, name=node.name)
 
+    async def _start_terminal_node(self, node: Node) -> None:
+        """启动一个 TERMINAL 节点：创建 pty session + TerminalNodeAdapter。"""
+        from tyrant_core.adapters.terminal_node import TerminalNodeAdapter
+
+        terminal_config = node.metadata.get("terminal_config", {})
+        command = terminal_config.get("command", "/bin/bash")
+        cwd = terminal_config.get("cwd")
+        env = terminal_config.get("env")
+
+        session_id = await self._terminal_manager.create_session(
+            command=command,
+            cwd=cwd,
+            env=env,
+            owner_agent_id=node.id,
+        )
+        session = self._terminal_manager.get_session(session_id)
+        assert session is not None
+
+        adapter = TerminalNodeAdapter(
+            node=node,
+            session=session,
+            api=self.api,
+            message_bus=self.message_bus,
+            aggregation_ms=self.settings.terminal_output_aggregation_ms,
+        )
+
+        task = asyncio.create_task(
+            adapter.run(),
+            name=f"terminal-{node.id}",
+        )
+        self._agents[node.id] = task
+        logger.info(
+            "terminal_node_started",
+            node_id=node.id,
+            name=node.name,
+            command=command,
+        )
+
     async def stop_agent(self, node_id: str) -> None:
-        """停止一个 Agent（取消协程 + 清理内存状态）。"""
+        """停止一个 Agent（取消协程 + 清理终端会话 + 清理内存状态）。"""
         task = self._agents.pop(node_id, None)
         if task:
             task.cancel()
@@ -87,23 +135,30 @@ class AgentRuntime:
             except asyncio.CancelledError:
                 pass
         self._runners.pop(node_id, None)
+        # 关闭该 Agent 拥有的所有终端会话
+        await self._terminal_manager.close_sessions_for_agent(node_id)
         logger.info("agent_stopped", node_id=node_id)
 
     async def recover(self) -> None:
-        """系统重启：从 store 恢复所有 ONLINE 的 LOCAL_AGENT 并启动。"""
+        """系统重启：从 store 恢复所有 ONLINE 的 LOCAL_AGENT 和 TERMINAL 并启动。"""
         async with self.api.store.transaction():
-            nodes = await self.api.store.list_nodes(
+            agents = await self.api.store.list_nodes(
                 type=NodeType.LOCAL_AGENT, status=NodeStatus.ONLINE
             )
-        for node in nodes:
+            terminals = await self.api.store.list_nodes(
+                type=NodeType.TERMINAL, status=NodeStatus.ONLINE
+            )
+        all_nodes = agents + terminals
+        for node in all_nodes:
             await self.start_agent(node)
-        logger.info("runtime_recovered", count=len(nodes))
+        logger.info("runtime_recovered", count=len(all_nodes))
 
     async def shutdown(self) -> None:
-        """优雅关闭所有 Agent。"""
+        """优雅关闭所有 Agent 和终端会话。"""
         node_ids = list(self._agents.keys())
         for node_id in node_ids:
             await self.stop_agent(node_id)
+        await self._terminal_manager.close_all()
         logger.info("runtime_shutdown")
 
     # ── ADK Agent 创建 ─────────────────────────────────────────────────────
@@ -137,6 +192,7 @@ class AgentRuntime:
 - 你的行为决策由你自己做出，基础设施只提供能力
 - 尽量并行分配子任务，减少等待时间
 - 如果遇到问题，向上级（消息发送者）提问而不是猜测
+- 需要特殊能力（如创建 Agent）时，用 list_nodes 查找可用的系统服务节点
 """
 
     def _create_adk_agent(self, node: Node) -> LlmAgent:
@@ -149,7 +205,36 @@ class AgentRuntime:
             description=config.get("description", f"Agent {node.name}"),
             instruction=config.get("instruction", self.DEFAULT_INSTRUCTION),
             tools=self._build_tools(node.id),
+            after_tool_callback=self._make_after_tool_callback(),
         )
+
+    def _make_after_tool_callback(self):
+        """构造 after_tool_callback，拦截 tool 返回值做截断。"""
+        settings = self.settings
+
+        def after_tool_callback(tool, args, tool_context, result) -> dict | None:
+            if not settings.tool_truncate_enabled or not isinstance(result, dict):
+                return None
+            # 对 result 中所有字符串值检查截断
+            modified = False
+            new_result = {}
+            for k, v in result.items():
+                if isinstance(v, str) and v:
+                    truncated = truncate_if_needed(
+                        v,
+                        data_dir=settings.data_dir,
+                        max_lines=settings.tool_truncate_max_lines,
+                        max_chars=settings.tool_truncate_max_chars,
+                        context_label=f"tool_{getattr(tool, 'name', 'unknown')}",
+                    )
+                    if truncated is not v:
+                        modified = True
+                    new_result[k] = truncated
+                else:
+                    new_result[k] = v
+            return new_result if modified else None
+
+        return after_tool_callback
 
     def _create_runner(self, agent: LlmAgent) -> Runner:
         return Runner(
@@ -310,6 +395,41 @@ class AgentRuntime:
             await self.api.revoke_delegation(agent_id, delegation_id)
             return {"revoked": delegation_id}
 
+        async def clone_node(
+            source_id: str,
+            parent_id: str,
+            name: str | None = None,
+        ) -> dict:
+            """以现有节点为模板创建新节点，复制 config/permissions/tags。"""
+            node = await self.api.clone_node(
+                caller_id=agent_id,
+                source_id=source_id,
+                parent_id=parent_id,
+                name=name,
+            )
+            await self.start_agent(node)
+            return {"agent_id": node.id, "name": node.name}
+
+        async def list_nodes(
+            tags: list[str] | None = None,
+        ) -> dict:
+            """查询节点列表。可按 tags 过滤，用于服务发现。"""
+            nodes = await self.api.list_nodes(
+                caller_id=agent_id, tags=tags,
+            )
+            return {
+                "nodes": [
+                    {
+                        "id": n.id,
+                        "name": n.name,
+                        "type": n.type.value,
+                        "tags": n.tags,
+                        "status": n.status.value,
+                    }
+                    for n in nodes
+                ]
+            }
+
         async def query_messages(
             node_id: str | None = None,
             from_node: str | None = None,
@@ -379,30 +499,56 @@ class AgentRuntime:
             recruit_agent,
             create_delegation,
             revoke_delegation,
+            clone_node,
+            list_nodes,
             query_messages,
             query_conversation_history,
+            *build_file_tools(),
+            *build_terminal_tools(
+                agent_id, self._terminal_manager, self.settings
+            ),
         ]
 
     # ── Inbox → ADK 桥接 ──────────────────────────────────────────────────
 
+    def _get_session_mode(self, node: Node) -> str:
+        """获取节点的 session 模式：persistent（默认）或 per_request。"""
+        config = node.metadata.get("agent_config", {})
+        return config.get("session_mode", "persistent")
+
     async def _agent_loop(self, node: Node, runner: Runner) -> None:
         """持续监听 inbox，通过 Runner.run_async() 处理消息。"""
         user_id = node.id
-        session_id = f"session_{node.id}"
+        session_mode = self._get_session_mode(node)
+        persistent_session_id = f"session_{node.id}"
 
-        # 创建 ADK session（招募回来的 agent 可能已有 session）
-        try:
-            await self._session_service.create_session(
-                app_name=APP_NAME,
-                user_id=user_id,
-                session_id=session_id,
-            )
-        except Exception:
-            # session 已存在，继续使用
-            pass
+        # persistent 模式：启动时创建一次 session
+        if session_mode == "persistent":
+            try:
+                await self._session_service.create_session(
+                    app_name=APP_NAME,
+                    user_id=user_id,
+                    session_id=persistent_session_id,
+                )
+            except Exception:
+                pass
 
         try:
             async for message in self.message_bus.subscribe_inbox(node.id):
+                # per_request 模式：每条消息新建临时 session
+                if session_mode == "per_request":
+                    session_id = f"session_{node.id}_{message.id}"
+                    try:
+                        await self._session_service.create_session(
+                            app_name=APP_NAME,
+                            user_id=user_id,
+                            session_id=session_id,
+                        )
+                    except Exception:
+                        pass
+                else:
+                    session_id = persistent_session_id
+
                 try:
                     user_content = self._format_message_for_adk(message)
 
@@ -564,11 +710,21 @@ class AgentRuntime:
 
     # ── 消息格式转换 ───────────────────────────────────────────────────────
 
-    @staticmethod
-    def _format_message_for_adk(message: Message) -> types.Content:
-        """将 TyrantCore Message 转为 ADK Content 对象。"""
+    def _format_message_for_adk(self, message: Message) -> types.Content:
+        """将 TyrantCore Message 转为 ADK Content 对象。超长内容自动截断。"""
         parts = [f"[From: {message.from_node}] [Type: {message.type}]"]
         if message.content:
             parts.append(json.dumps(message.content, ensure_ascii=False))
         text = "\n".join(parts)
+
+        # 消息输入截断
+        if self.settings.msg_truncate_enabled:
+            text = truncate_if_needed(
+                text,
+                data_dir=self.settings.data_dir,
+                max_lines=self.settings.msg_truncate_max_lines,
+                max_chars=self.settings.msg_truncate_max_chars,
+                context_label="message",
+            )
+
         return types.Content(role="user", parts=[types.Part(text=text)])

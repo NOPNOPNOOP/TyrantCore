@@ -10,7 +10,7 @@
 - **数据模型**: Pydantic v2
 - **CLI**: rich（输出美化）+ prompt_toolkit（异步交互输入）
 - **日志**: structlog（结构化日志，contextvars 绑定 Agent 上下文）
-- **配置**: pydantic-settings（ASA_* 环境变量 + ~/.config/tyrant_core/.env）
+- **配置**: pydantic-settings（TYRANT_* 环境变量 + ~/.config/tyrant_core/.env）
 - **LLM 适配**: litellm（非 Gemini 模型通过 OpenAI 兼容 API 调用）
 - **包管理**: uv
 - **测试**: pytest + pytest-asyncio
@@ -113,7 +113,7 @@ async def main():
 - 异步方法统一用 async/await
 - 错误通过自定义异常抛出，不用错误码
 - 日志用 structlog，通过 contextvars 自动绑定 node_id 等上下文
-- 配置通过 pydantic-settings，支持 ASA_* 环境变量和 `~/.config/tyrant_core/.env`
+- 配置通过 pydantic-settings，支持 TYRANT_* 环境变量和 `~/.config/tyrant_core/.env`
 
 ## 依赖清单
 

@@ -780,6 +780,99 @@ class SystemAPI:
                 limit=limit,
             )
 
+    # ═══ 节点克隆 ═════════════════════════════════════════════════════════════════
+
+    async def clone_node(
+        self,
+        caller_id: str,
+        source_id: str,
+        parent_id: str,
+        name: str | None = None,
+    ) -> Node:
+        """
+        以 source 节点为模板创建新节点，复制 agent_config + permissions + tags。
+
+        权限检查：caller 需要 create_agent 权限。
+        """
+        await self._check_permission(caller_id, "create_agent", parent_id)
+
+        source = await self._get_node_or_raise(source_id)
+        clone_name = name or f"{source.name}-clone"
+        clone_config = source.metadata.get("agent_config")
+        # 复制 metadata（去掉运行时状态，保留 agent_config）
+        clone_metadata = {}
+        if clone_config:
+            clone_metadata["agent_config"] = clone_config
+
+        now = self._now()
+        node_id = str(uuid4())
+        node = Node(
+            id=node_id,
+            type=source.type,
+            name=clone_name,
+            endpoint=Endpoint(protocol="local", address=node_id),
+            status=NodeStatus.ONLINE,
+            permissions=list(source.permissions),
+            tags=list(source.tags),
+            metadata=clone_metadata,
+            created_at=now,
+        )
+
+        async with self.store.transaction():
+            await self.store.save_node(node)
+            # REPORTS_TO
+            await self.store.save_relation(Relation(
+                id=str(uuid4()),
+                type=RelationType.REPORTS_TO,
+                node_a=parent_id,
+                node_b=node_id,
+                config=clone_config or {},
+                created_at=now,
+            ))
+            # 自动 CONNECTED
+            siblings = await self.store.get_subordinates(parent_id)
+            for sib in siblings:
+                if sib.node_b != node_id:
+                    await self.store.save_relation(Relation(
+                        id=str(uuid4()),
+                        type=RelationType.CONNECTED,
+                        node_a=node_id,
+                        node_b=sib.node_b,
+                        created_at=now,
+                    ))
+
+        async with self.store.transaction():
+            await self.event_bus.publish(Event(
+                id=str(uuid4()),
+                type="node.cloned",
+                timestamp=now,
+                source="system",
+                data={"node_id": node_id, "source_id": source_id, "parent_id": parent_id},
+            ))
+
+        logger.info("node_cloned", node_id=node_id, source_id=source_id)
+        return node
+
+    # ═══ 节点查询 ═════════════════════════════════════════════════════════════════
+
+    async def list_nodes(
+        self,
+        caller_id: str,
+        tags: list[str] | None = None,
+        type: NodeType | None = None,
+        status: NodeStatus | None = None,
+    ) -> list[Node]:
+        """查询节点列表。可按 tags/type/status 过滤。任何节点可调用。"""
+        filters: dict = {}
+        if tags:
+            filters["tags"] = tags
+        if type:
+            filters["type"] = type
+        if status:
+            filters["status"] = status
+        async with self.store.transaction():
+            return await self.store.list_nodes(**filters)
+
     # ═══ 事件 ═════════════════════════════════════════════════════════════════════
 
     async def publish_event(self, caller_id: str, event: Event) -> None:

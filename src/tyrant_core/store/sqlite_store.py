@@ -66,6 +66,7 @@ nodes_table = Table(
     Column("endpoint", JSON, nullable=False),
     Column("status", String, nullable=False, default="OFFLINE"),
     Column("permissions", JSON, nullable=False),
+    Column("tags", JSON, nullable=False, default=[]),
     Column("metadata_", JSON, nullable=False, default={}),
     Column("created_at", String, nullable=False),
 )
@@ -204,6 +205,7 @@ def _node_to_row(node: Node) -> dict[str, Any]:
         "endpoint": node.endpoint.model_dump(),
         "status": node.status.value,
         "permissions": [p.model_dump() for p in node.permissions],
+        "tags": node.tags,
         "metadata_": node.metadata,
         "created_at": _dt_to_str(node.created_at),
     }
@@ -224,6 +226,7 @@ def _row_to_node(row: Any) -> Node:
         endpoint=Endpoint(**row.endpoint),
         status=NodeStatus(row.status),
         permissions=perms,
+        tags=row.tags or [],
         metadata=row.metadata_,
         created_at=_str_to_dt(row.created_at),  # type: ignore[arg-type]
     )
@@ -477,6 +480,8 @@ class SqliteStore(Store):
                 values["status"] = val.value if hasattr(val, "value") else val
             elif key == "type":
                 values["type"] = val.value if hasattr(val, "value") else val
+            elif key == "tags":
+                values["tags"] = val
             elif key == "metadata":
                 values["metadata_"] = val
             elif key == "created_at" and isinstance(val, datetime):
@@ -504,8 +509,13 @@ class SqliteStore(Store):
                 stmt = stmt.where(nodes_table.c.status == (val.value if hasattr(val, "value") else val))
             elif key == "is_owner":
                 stmt = stmt.where(nodes_table.c.is_owner == int(val))
+            # tags 过滤在 Python 层做（SQLite JSON 数组查询不便）
         result = await session.execute(stmt)
-        return [_row_to_node(row) for row in result.fetchall()]
+        rows = [_row_to_node(row) for row in result.fetchall()]
+        if "tags" in filters:
+            filter_tags = set(filters["tags"]) if isinstance(filters["tags"], list) else {filters["tags"]}
+            rows = [n for n in rows if filter_tags & set(n.tags)]
+        return rows
 
     # ── Relation ───────────────────────────────────────────────────────────
 

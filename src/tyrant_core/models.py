@@ -15,6 +15,7 @@ class NodeType(str, Enum):
     HUMAN = "HUMAN"
     LOCAL_AGENT = "LOCAL_AGENT"
     EXTERNAL_AGENT = "EXTERNAL_AGENT"
+    TERMINAL = "TERMINAL"
 
 
 class NodeStatus(str, Enum):
@@ -99,6 +100,7 @@ class Node(BaseModel):
     endpoint: Endpoint
     status: NodeStatus = NodeStatus.OFFLINE
     permissions: list[Permission] = []  # v3: 显式作用域权限列表
+    tags: list[str] = []  # v5: 服务发现标签
     metadata: dict = {}
     created_at: datetime
 

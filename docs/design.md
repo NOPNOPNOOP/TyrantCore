@@ -872,3 +872,104 @@ query_messages(node_id, from_node, to_node, type, limit)
 | 查自己的消息/对话历史 | 始终允许 |
 | 查直接下属的 | 隐含允许（上级权限） |
 | 查其他节点的 | 需要 audit 权限（对目标节点） |
+
+---
+
+## v4 演进：终端能力 + Agent 输入管理
+
+驱动场景：Agent 需要与终端交互（运行命令、使用 Codex/Claude Code 等工具）。同时，Agent 的输入（tool 返回值、收到的消息）可能超长，需要自动截断保护。
+
+### 两种终端交互范式
+
+共享同一个底层 pty 会话管理（TerminalSession），上层提供两种使用方式：
+
+**范式 1：Tool-based（Agent 主动管理终端）**
+
+Agent 通过 tool call 主动操作终端会话，适合快速命令操作（git, pytest, grep 等）：
+
+```
+terminal_start(command, cwd, env) → session_id   # 启动进程
+terminal_read(session_id, timeout) → output       # 读输出（等待模式，超时返回空）
+terminal_write(session_id, input) → ok            # 写 stdin
+terminal_signal(session_id, signal) → ok          # 发信号（SIGINT 等）
+terminal_close(session_id) → ok                   # 关闭会话
+```
+
+Agent 是驱动者，在 ADK agent loop 的 tool call 中操作。一个 Agent 可同时管理多个会话。
+
+**范式 2：TerminalNode（消息驱动）**
+
+终端进程作为 Node 接入通信网络，适合长时间运行的 agentic 工具（Codex, Claude Code 等）：
+
+```
+[进程 stdout] → 按时间窗口聚合 → Message → 管理者 Agent
+[管理者 Agent] → Message → TerminalNode → [进程 stdin]
+```
+
+- `NodeType.TERMINAL`：新的节点类型，运行时根据 NodeType dispatch 不同的处理循环
+- 输出聚合：按时间窗口（可配置）将 stdout 聚合为一条 Message
+- 创建方式：Agent 通过 API 动态创建 + 系统预配置，两种都支持
+
+### TerminalSession（共享底层）
+
+基于 pty（`os.openpty()`）+ asyncio 事件循环的进程管理：
+
+- 每个 session 归属一个 agent_id
+- cwd 和环境变量由调用方指定
+- 生命周期管理：
+  - Agent stop 时自动 kill 所有归属 session
+  - idle 超时自动 kill（可配置）
+
+```
+adapters/
+  terminal.py         # TerminalSession — pty 管理（共享基础设施）
+  external_agent.py   # TerminalNode adapter（范式 2）
+runtime/
+  terminal_tools.py   # Terminal tools（范式 1）
+```
+
+### 通用 File Tools
+
+独立于终端的文件操作能力，所有 Agent 可用：
+
+```
+file_read(path, start_line, end_line) → content   # 按行范围读文件
+file_grep(path, pattern) → matches                # 搜索文件内容
+```
+
+> **已知问题**：当前无访问范围限制，Agent 可读任意文件。后续需加入路径白名单或沙箱机制。
+
+### Agent 输入管理（截断机制）
+
+任何超长的单次输入都自动截断，保护 Agent 的上下文窗口。截断不处理 history 累积问题，只管单次内容。
+
+**两组独立配置（各自可开关）：**
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| TYRANT_TOOL_TRUNCATE_ENABLED | true | 启用 tool 结果截断 |
+| TYRANT_TOOL_TRUNCATE_MAX_LINES | 200 | tool 结果最大行数 |
+| TYRANT_TOOL_TRUNCATE_MAX_CHARS | 5000 | tool 结果最大字符数 |
+| TYRANT_MSG_TRUNCATE_ENABLED | true | 启用消息输入截断 |
+| TYRANT_MSG_TRUNCATE_MAX_LINES | 200 | 消息输入最大行数 |
+| TYRANT_MSG_TRUNCATE_MAX_CHARS | 5000 | 消息输入最大字符数 |
+
+阈值取先到的（行数或字符数）。
+
+**截断流程：**
+1. 内容超出阈值
+2. 全量写入 `{data_dir}/truncated_outputs/{context}_{timestamp}.log`
+3. 返回尾部截取内容 + 结构化提示：文件路径、总行数、如何用 `file_read` / `file_grep` 查看
+
+**调用点（通过 ADK callback 机制）：**
+- `after_tool_callback`：拦截 tool 返回值，超长则截断
+- `_format_message_for_adk`：转换收到的 Message 时，超长则截断
+
+截断逻辑是一个独立的工具函数，两个调用点复用。
+
+### 实现顺序
+
+1. TerminalSession（pty 底层管理）
+2. File tools + 截断机制
+3. Terminal tools（范式 1）
+4. TerminalNode adapter（范式 2）
