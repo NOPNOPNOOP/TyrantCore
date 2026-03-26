@@ -1,4 +1,4 @@
-"""Store 抽象接口。所有持久化操作的契约定义。"""
+"""v2 Store 抽象接口。"""
 
 from __future__ import annotations
 
@@ -8,169 +8,294 @@ from datetime import datetime
 from typing import AsyncContextManager, AsyncIterator
 
 from tyrant_core.models import (
-    ConversationTurn,
-    Delegation,
-    Event,
-    Message,
-    Node,
-    Relation,
-    Task,
+    Actor,
+    ActorControl,
+    ActorProfile,
+    Attachment,
+    Binding,
+    Delivery,
+    DomainEvent,
+    Envelope,
+    Grant,
+    OrgEdge,
+    Presence,
+    ProvisionRecord,
+    ProvisionRequest,
+    Session,
+    Thread,
+    WorkItem,
 )
 
 
 class Store(ABC):
-    """持久化层抽象基类。"""
-
-    # ── Node ───────────────────────────────────────────────────────────────
+    """v2 持久化层抽象基类。"""
 
     @abstractmethod
-    async def save_node(self, node: Node) -> None: ...
+    async def save_actor(self, actor: Actor) -> None: ...
 
     @abstractmethod
-    async def get_node(self, node_id: str) -> Node | None: ...
+    async def get_actor(self, actor_id: str) -> Actor | None: ...
 
     @abstractmethod
-    async def update_node(self, node_id: str, **fields) -> None: ...
+    async def update_actor(self, actor_id: str, **fields) -> None: ...
 
     @abstractmethod
-    async def delete_node(self, node_id: str) -> None: ...
+    async def list_actors(self, **filters) -> list[Actor]: ...
 
     @abstractmethod
-    async def list_nodes(self, **filters) -> list[Node]: ...
-
-    # ── Relation ───────────────────────────────────────────────────────────
+    async def save_org_edge(self, edge: OrgEdge) -> None: ...
 
     @abstractmethod
-    async def save_relation(self, relation: Relation) -> None: ...
+    async def list_org_edges(self, **filters) -> list[OrgEdge]: ...
 
     @abstractmethod
-    async def get_relation(self, relation_id: str) -> Relation | None: ...
+    async def save_grant(self, grant: Grant) -> None: ...
 
     @abstractmethod
-    async def delete_relation(self, relation_id: str) -> None: ...
+    async def list_grants(self, subject_actor_id: str) -> list[Grant]: ...
 
     @abstractmethod
-    async def get_relations_for_node(self, node_id: str) -> list[Relation]: ...
+    async def save_actor_profile(self, profile: ActorProfile) -> None: ...
 
     @abstractmethod
-    async def get_reports_to(self, node_id: str) -> Relation | None:
-        """获取该节点的上级关系。"""
-        ...
+    async def get_actor_profile(self, profile_id: str) -> ActorProfile | None: ...
 
     @abstractmethod
-    async def get_subordinates(self, node_id: str) -> list[Relation]:
-        """获取直接下属。"""
-        ...
-
-    @abstractmethod
-    async def get_subtree_node_ids(self, node_id: str) -> set[str]:
-        """获取整棵子树的节点 ID 集合。"""
-        ...
-
-    # ── Message ────────────────────────────────────────────────────────────
-
-    @abstractmethod
-    async def save_message(self, message: Message) -> None: ...
-
-    @abstractmethod
-    async def get_message(self, message_id: str) -> Message | None: ...
-
-    @abstractmethod
-    async def get_inbox(self, node_id: str, limit: int = 50) -> list[Message]:
-        """按 priority 排序获取收件箱消息。"""
-        ...
-
-    @abstractmethod
-    async def mark_delivered(self, message_id: str, node_id: str) -> None: ...
-
-    @abstractmethod
-    async def mark_acked(self, message_id: str, node_id: str) -> None: ...
-
-    @abstractmethod
-    async def query_messages(
+    async def query_actor_profiles(
         self,
-        node_id: str | None = None,
-        from_node: str | None = None,
-        to_node: str | None = None,
-        type: str | None = None,
+        *,
+        archived: bool | None = None,
         limit: int = 50,
-    ) -> list[Message]:
-        """多条件查询消息。node_id 匹配 from 或 to。按 timestamp DESC。"""
-        ...
-
-    # ── Task ───────────────────────────────────────────────────────────────
+    ) -> list[ActorProfile]: ...
 
     @abstractmethod
-    async def save_task(self, task: Task) -> None: ...
+    async def save_actor_control(self, control: ActorControl) -> None: ...
 
     @abstractmethod
-    async def get_task(self, task_id: str) -> Task | None: ...
+    async def get_actor_control(self, actor_id: str) -> ActorControl | None: ...
 
     @abstractmethod
-    async def update_task(self, task_id: str, **fields) -> None: ...
+    async def update_actor_control(self, actor_id: str, **fields) -> None: ...
 
     @abstractmethod
-    async def query_tasks(self, **filters) -> list[Task]: ...
-
-    # ── Delegation ───────────────────────────────────────────────────────────────
-
-    @abstractmethod
-    async def save_delegation(self, delegation: Delegation) -> None: ...
-
-    @abstractmethod
-    async def get_delegation(self, delegation_id: str) -> Delegation | None: ...
-
-    @abstractmethod
-    async def delete_delegation(self, delegation_id: str) -> None: ...
-
-    @abstractmethod
-    async def get_delegations_for_delegate(
-        self, delegate_id: str, action: str | None = None,
-    ) -> list[Delegation]:
-        """获取某节点收到的所有委托，可按 action 过滤。"""
-        ...
-
-    # ── ConversationTurn ───────────────────────────────────────────────────────
-
-    @abstractmethod
-    async def save_conversation_turn(self, turn: ConversationTurn) -> None: ...
-
-    @abstractmethod
-    async def query_conversation_turns(
+    async def query_actor_controls(
         self,
-        node_id: str,
-        trigger_message_id: str | None = None,
+        *,
+        manager_actor_id: str | None = None,
+        desired_state: str | None = None,
+        runtime_kind: str | None = None,
         limit: int = 50,
-    ) -> list[ConversationTurn]:
-        """查询节点的对话历史。按 timestamp ASC。"""
-        ...
-
-    # ── Event ───────────────────────────────────────────────────────────────────
+    ) -> list[ActorControl]: ...
 
     @abstractmethod
-    async def append_event(self, event: Event) -> None: ...
+    async def save_thread(self, thread: Thread) -> None: ...
 
     @abstractmethod
-    async def get_events(
+    async def get_thread(self, thread_id: str) -> Thread | None: ...
+
+    @abstractmethod
+    async def save_envelope(self, envelope: Envelope) -> None: ...
+
+    @abstractmethod
+    async def get_envelope(self, envelope_id: str) -> Envelope | None: ...
+
+    @abstractmethod
+    async def query_envelopes(
         self,
-        since: datetime,
-        types: list[str] | None = None,
+        *,
+        thread_id: str | None = None,
+        sender_actor_id: str | None = None,
+        limit: int = 50,
+    ) -> list[Envelope]: ...
+
+    @abstractmethod
+    async def save_delivery(self, delivery: Delivery) -> None: ...
+
+    @abstractmethod
+    async def get_delivery(self, delivery_id: str) -> Delivery | None: ...
+
+    @abstractmethod
+    async def lease_deliveries(
+        self,
+        *,
+        recipient_actor_id: str,
+        lease_owner: str,
+        limit: int = 1,
+        lease_seconds: int = 30,
+    ) -> list[Delivery]: ...
+
+    @abstractmethod
+    async def ack_delivery(self, delivery_id: str) -> None: ...
+
+    @abstractmethod
+    async def fail_delivery(self, delivery_id: str, error: dict | None = None) -> None: ...
+
+    @abstractmethod
+    async def query_deliveries(
+        self,
+        *,
+        recipient_actor_id: str | None = None,
+        state: str | None = None,
+        limit: int = 50,
+    ) -> list[Delivery]: ...
+
+    @abstractmethod
+    async def save_binding(self, binding: Binding) -> None: ...
+
+    @abstractmethod
+    async def query_bindings(
+        self,
+        *,
+        surface: str | None = None,
+        actor_id: str | None = None,
+        limit: int = 50,
+    ) -> list[Binding]: ...
+
+    @abstractmethod
+    async def resolve_binding(
+        self,
+        *,
+        surface: str,
+        account_id: str | None = None,
+        peer: str | None = None,
+    ) -> Binding | None: ...
+
+    @abstractmethod
+    async def save_session(self, session: Session) -> None: ...
+
+    @abstractmethod
+    async def get_session(self, session_id: str) -> Session | None: ...
+
+    @abstractmethod
+    async def query_sessions(
+        self,
+        *,
+        actor_id: str | None = None,
+        surface: str | None = None,
+        external_key: str | None = None,
+        state: str | None = None,
+        limit: int = 50,
+    ) -> list[Session]: ...
+
+    @abstractmethod
+    async def save_attachment(self, attachment: Attachment) -> None: ...
+
+    @abstractmethod
+    async def query_attachments(
+        self,
+        *,
+        actor_id: str | None = None,
+        kind: str | None = None,
+        limit: int = 50,
+    ) -> list[Attachment]: ...
+
+    @abstractmethod
+    async def save_presence(self, presence: Presence) -> None: ...
+
+    @abstractmethod
+    async def get_presence(self, attachment_id: str) -> Presence | None: ...
+
+    @abstractmethod
+    async def save_work_item(self, work_item: WorkItem) -> None: ...
+
+    @abstractmethod
+    async def get_work_item(self, work_item_id: str) -> WorkItem | None: ...
+
+    @abstractmethod
+    async def update_work_item(self, work_item_id: str, **fields) -> None: ...
+
+    @abstractmethod
+    async def claim_work_item(
+        self,
+        work_item_id: str,
+        *,
+        owner_actor_id: str | None = None,
+    ) -> bool: ...
+
+    @abstractmethod
+    async def query_work_items(
+        self,
+        *,
+        owner_actor_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[WorkItem]: ...
+
+    @abstractmethod
+    async def save_provision_request(self, request: ProvisionRequest) -> None: ...
+
+    @abstractmethod
+    async def get_provision_request(
+        self,
+        request_id: str,
+    ) -> ProvisionRequest | None: ...
+
+    @abstractmethod
+    async def claim_provision_request(
+        self,
+        request_id: str,
+        executor_actor_id: str,
+    ) -> bool: ...
+
+    @abstractmethod
+    async def update_provision_request(self, request_id: str, **fields) -> None: ...
+
+    @abstractmethod
+    async def query_provision_requests(
+        self,
+        *,
+        status: str | None = None,
+        requested_by_actor_id: str | None = None,
+        target_parent_actor_id: str | None = None,
+        limit: int = 50,
+    ) -> list[ProvisionRequest]: ...
+
+    @abstractmethod
+    async def save_provision_record(self, record: ProvisionRecord) -> None: ...
+
+    @abstractmethod
+    async def get_provision_record(
+        self,
+        record_id: str,
+    ) -> ProvisionRecord | None: ...
+
+    @abstractmethod
+    async def update_provision_record(self, record_id: str, **fields) -> None: ...
+
+    @abstractmethod
+    async def query_provision_records(
+        self,
+        *,
+        request_id: str | None = None,
+        produced_actor_id: str | None = None,
+        state: str | None = None,
+        limit: int = 50,
+    ) -> list[ProvisionRecord]: ...
+
+    @abstractmethod
+    async def append_domain_event(self, event: DomainEvent) -> None: ...
+
+    @abstractmethod
+    async def get_domain_events(
+        self,
+        *,
+        since: datetime | None = None,
         limit: int = 100,
-    ) -> list[Event]: ...
-
-    # ── Transaction ────────────────────────────────────────────────────────
+    ) -> list[DomainEvent]: ...
 
     @abstractmethod
     def transaction(self) -> AsyncContextManager:
         """async with store.transaction(): ..."""
         ...
 
-    # ── Lifecycle ──────────────────────────────────────────────────────────
-
     @abstractmethod
-    async def initialize(self) -> None:
-        """创建表、索引等。"""
-        ...
+    async def initialize(self) -> None: ...
 
     @abstractmethod
     async def close(self) -> None: ...
+
+
+@asynccontextmanager
+async def noop_transaction() -> AsyncIterator[None]:
+    """为临时内存实现提供的空事务。"""
+    yield

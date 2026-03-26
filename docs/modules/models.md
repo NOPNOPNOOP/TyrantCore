@@ -1,5 +1,7 @@
 # models.py — 数据模型
 
+> 注意：本文描述的是 v1 / legacy 数据模型，当前活跃模型请以 [`docs/architecture-v2.md`](../architecture-v2.md) 和 `src/tyrant_core/models.py` 为准。
+
 零依赖模块，纯 Pydantic 模型 + Enum + 异常。
 
 ## Enums

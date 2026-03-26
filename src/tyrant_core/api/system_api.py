@@ -1,882 +1,433 @@
-"""系统 API。所有对外操作的唯一入口，权限检查在此层完成。"""
+"""v2 SystemAPI。
+
+SystemAPI 现在是命令侧与查询侧的组合边界，而不是 v1 的巨型业务类。
+"""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import uuid4
+from typing import TYPE_CHECKING
 
-import structlog
+from tyrant_core.bus import EventBus
+from tyrant_core.api.command_api import CommandAPI
+from tyrant_core.api.policies import PolicyDecision, PolicyEngine
+from tyrant_core.api.query_api import QueryAPI
+from tyrant_core.management.reconciler import ActorReconciler
+from tyrant_core.management.service import ActorManagementService
+from tyrant_core.models import UnsupportedLegacyComponentError
+from tyrant_core.provisioning.base import ProvisioningQueueProcessorLike
+from tyrant_core.provisioning.queue_processor import ProvisioningQueueProcessor
+from tyrant_core.provisioning.service import ProvisioningService
+from tyrant_core.provisioning.work_item_handler import ProvisioningWorkItemHandler
+from tyrant_core.store import SqliteStore, Store
 
-from tyrant_core.models import (
-    ConversationTurn,
-    Delegation,
-    Endpoint,
-    Event,
-    Message,
-    Node,
-    NodeNotFoundError,
-    NodeStatus,
-    NodeType,
-    Permission,
-    PermissionDeniedError,
-    PermissionEffect,
-    Priority,
-    Reference,
-    RefType,
-    Relation,
-    RelationType,
-    Scope,
-    ScopeType,
-    Task,
-    TaskStatus,
-)
-from tyrant_core.store.base import Store
-from tyrant_core.bus.event_bus import EventBus
-from tyrant_core.bus.message_bus import MessageBus
-
-logger = structlog.get_logger()
+if TYPE_CHECKING:
+    from tyrant_core.runtime.runtime_supervisor import RuntimeSupervisor
 
 
 class SystemAPI:
-    """所有对外操作的统一入口。"""
+    """v2 对外统一入口。"""
 
     def __init__(
         self,
-        store: Store,
-        message_bus: MessageBus,
-        event_bus: EventBus,
+        store: Store | None = None,
+        event_bus: EventBus | None = None,
+        policies: PolicyEngine | None = None,
+        commands: CommandAPI | None = None,
+        queries: QueryAPI | None = None,
+        management: ActorManagementService | None = None,
+        provisioning: ProvisioningService | None = None,
+        provisioning_work_items: ProvisioningWorkItemHandler | None = None,
+        provisioning_queue: ProvisioningQueueProcessorLike | None = None,
+        agent_factory: ProvisioningQueueProcessorLike | None = None,
+        runtime_supervisor: "RuntimeSupervisor" | None = None,
+        reconciler: ActorReconciler | None = None,
     ) -> None:
-        self.store = store
-        self.message_bus = message_bus
-        self.event_bus = event_bus
-
-    # ═══ 权限检查（v3: 显式作用域 + 委托 + deny 优先）═══════════════════════
-
-    async def _get_node_or_raise(self, node_id: str) -> Node:
-        async with self.store.transaction():
-            node = await self.store.get_node(node_id)
-        if node is None:
-            raise NodeNotFoundError(f"Node {node_id} not found")
-        return node
-
-    async def _check_permission(
-        self, caller_id: str, action: str, target_id: str | None = None,
-    ) -> None:
-        """
-        v3 权限检查。
-
-        1. Tyrant (is_owner) 拥有全部权限
-        2. 收集节点自身 permissions + 收到的 delegations
-        3. deny 命中 → 拒绝
-        4. allow 命中 → 放行
-        5. 默认 → 拒绝
-        """
-        node = await self._get_node_or_raise(caller_id)
-        if node.is_owner:
-            return
-
-        # 收集所有匹配 action 的条目
-        entries: list[Permission] = []
-        for perm in node.permissions:
-            if perm.action in (action, "*"):
-                entries.append(perm)
-
-        # 收集委托（将 Delegation 转为 allow Permission）
-        async with self.store.transaction():
-            delegations = await self.store.get_delegations_for_delegate(
-                caller_id, action=action,
+        self.store = store or SqliteStore()
+        self.event_bus = event_bus or EventBus()
+        self.policies = policies or PolicyEngine(self.store)
+        self.commands = commands or CommandAPI(
+            self.store,
+            self.event_bus,
+            self.policies,
+        )
+        self.queries = queries or QueryAPI(self.store)
+        self.management = management or ActorManagementService(self.store)
+        self.provisioning = provisioning or ProvisioningService(self.store)
+        self.runtime_supervisor = runtime_supervisor
+        self.reconciler = reconciler
+        self.provisioning_work_items = provisioning_work_items or ProvisioningWorkItemHandler(
+            self.provisioning,
+            store=self.store,
+            reconciler=self.reconciler,
+        )
+        if provisioning_queue is not None:
+            self.provisioning_queue = provisioning_queue
+        elif agent_factory is not None:
+            self.provisioning_queue = agent_factory
+        elif all(
+            hasattr(self.store, attr)
+            for attr in ("transaction", "query_work_items", "claim_work_item")
+        ):
+            self.provisioning_queue = ProvisioningQueueProcessor(
+                store=self.store,
+                handler=self.provisioning_work_items,
             )
-        now = self._now()
-        for d in delegations:
-            if d.expires_at and d.expires_at < now:
-                continue  # 已过期
-            entries.append(Permission(
-                action=d.action,
-                effect=PermissionEffect.ALLOW,
-                scope=d.scope,
-            ))
+        else:
+            self.provisioning_queue = None
+        self.agent_factory = self.provisioning_queue
 
-        # deny 优先
-        for entry in entries:
-            if entry.effect == PermissionEffect.DENY:
-                if await self._scope_matches(caller_id, entry.scope, target_id):
-                    raise PermissionDeniedError(
-                        f"{caller_id} denied {action} on {target_id}"
-                    )
+    @staticmethod
+    def _dump(value):
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json")
+        return value
 
-        # allow 检查
-        for entry in entries:
-            if entry.effect == PermissionEffect.ALLOW:
-                if await self._scope_matches(caller_id, entry.scope, target_id):
-                    return
+    @classmethod
+    def _dump_list(cls, values):
+        return [cls._dump(value) for value in values]
 
-        raise PermissionDeniedError(f"{caller_id} lacks {action}")
+    def _require_runtime_supervisor(self) -> "RuntimeSupervisor":
+        if self.runtime_supervisor is None:
+            raise UnsupportedLegacyComponentError("runtime supervisor is not configured")
+        return self.runtime_supervisor
 
-    async def _scope_matches(
-        self, caller_id: str, scope: Scope, target_id: str | None,
-    ) -> bool:
-        """检查 target_id 是否在 scope 范围内。"""
-        if target_id is None:
-            return True  # 无具体目标，有权限即可
-        if scope.type == ScopeType.GLOBAL:
-            return True
-        if scope.type == ScopeType.SELF_SUBTREE:
-            async with self.store.transaction():
-                subtree = await self.store.get_subtree_node_ids(caller_id)
-            return target_id in subtree
-        if scope.type == ScopeType.SUBTREES:
-            for root_id in scope.targets:
-                async with self.store.transaction():
-                    subtree = await self.store.get_subtree_node_ids(root_id)
-                if target_id in subtree:
-                    return True
-            return False
-        if scope.type == ScopeType.NODES:
-            return target_id in scope.targets
-        return False
+    def _require_reconciler(self) -> ActorReconciler:
+        if self.reconciler is None:
+            raise UnsupportedLegacyComponentError("actor reconciler is not configured")
+        return self.reconciler
 
-    async def _is_direct_superior(self, caller_id: str, target_id: str) -> bool:
-        """检查 caller 是否是 target 的直接上级。"""
-        async with self.store.transaction():
-            rel = await self.store.get_reports_to(target_id)
-        return rel is not None and rel.node_a == caller_id
+    def _require_provisioning_queue(self) -> ProvisioningQueueProcessorLike:
+        if self.provisioning_queue is None:
+            raise UnsupportedLegacyComponentError("provisioning queue is not configured")
+        return self.provisioning_queue
 
-    def _now(self) -> datetime:
-        return datetime.now(timezone.utc)
+    def _require_agent_factory(self) -> ProvisioningQueueProcessorLike:
+        return self._require_provisioning_queue()
 
-    # ═══ Agent 生命周期 ═══════════════════════════════════════════════════════
+    async def create_actor(self, spec: dict) -> dict:
+        result = await self.commands.create_actor(spec)
+        return result.payload
 
-    async def create_agent(
+    async def create_org_edge(self, spec: dict) -> dict:
+        result = await self.commands.create_org_edge(spec)
+        return result.payload
+
+    async def issue_grant(self, spec: dict) -> dict:
+        result = await self.commands.issue_grant(spec)
+        return result.payload
+
+    async def open_thread(self, spec: dict) -> dict:
+        result = await self.commands.open_thread(spec)
+        return result.payload
+
+    async def send_envelope(self, spec: dict) -> dict:
+        result = await self.commands.send_envelope(spec)
+        return result.payload
+
+    async def create_work_item(self, spec: dict) -> dict:
+        result = await self.commands.create_work_item(spec)
+        return result.payload
+
+    async def register_attachment(self, spec: dict) -> dict:
+        result = await self.commands.register_attachment(spec)
+        return result.payload
+
+    async def report_presence(self, spec: dict) -> dict:
+        result = await self.commands.report_presence(spec)
+        return result.payload
+
+    async def create_actor_profile(self, spec: dict) -> dict:
+        return self._dump(await self.management.create_profile(spec))
+
+    async def get_actor_profile(self, profile_id: str) -> dict | None:
+        return self._dump(await self.management.get_profile(profile_id))
+
+    async def query_actor_profiles(
         self,
-        caller_id: str,
-        name: str,
-        parent_id: str,
-        agent_config: dict | None = None,
-        metadata: dict | None = None,
-    ) -> Node:
-        """
-        原子操作：创建节点 + 建立 REPORTS_TO + 自动建立同级 CONNECTED。
-
-        权限检查：caller 需要 create_agent 权限，parent_id 在 caller 子树内。
-        """
-        await self._check_permission(caller_id, "create_agent", parent_id)
-
-        now = self._now()
-        node_id = str(uuid4())
-
-        # agent_config 同时存入 node.metadata 供 runtime 读取
-        node_metadata = metadata or {}
-        if agent_config:
-            node_metadata["agent_config"] = agent_config
-
-        node = Node(
-            id=node_id,
-            type=NodeType.LOCAL_AGENT,
-            name=name,
-            endpoint=Endpoint(protocol="local", address=node_id),
-            status=NodeStatus.ONLINE,
-            metadata=node_metadata,
-            created_at=now,
+        *,
+        archived: bool | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        return self._dump_list(
+            await self.management.query_profiles(archived=archived, limit=limit)
         )
 
-        async with self.store.transaction():
-            # 1. 创建节点
-            await self.store.save_node(node)
+    async def create_actor_control(self, spec: dict) -> dict:
+        return self._dump(await self.management.create_control(spec))
 
-            # 2. 建立 REPORTS_TO
-            reports_rel = Relation(
-                id=str(uuid4()),
-                type=RelationType.REPORTS_TO,
-                node_a=parent_id,
-                node_b=node_id,
-                config=agent_config or {},
-                created_at=now,
-            )
-            await self.store.save_relation(reports_rel)
+    async def get_actor_control(self, actor_id: str) -> dict | None:
+        return self._dump(await self.management.get_control(actor_id))
 
-            # 3. 自动建立同级 CONNECTED
-            siblings = await self.store.get_subordinates(parent_id)
-            for sib in siblings:
-                if sib.node_b != node_id:
-                    conn = Relation(
-                        id=str(uuid4()),
-                        type=RelationType.CONNECTED,
-                        node_a=node_id,
-                        node_b=sib.node_b,
-                        created_at=now,
-                    )
-                    await self.store.save_relation(conn)
-
-        # 4. 发布事件
-        async with self.store.transaction():
-            await self.event_bus.publish(Event(
-                id=str(uuid4()),
-                type="node.created",
-                timestamp=now,
-                source="system",
-                data={"node_id": node_id, "name": name, "parent_id": parent_id},
-            ))
-
-        logger.info("agent_created", node_id=node_id, name=name, parent_id=parent_id)
-        return node
-
-    async def destroy_agent(self, caller_id: str, node_id: str) -> None:
-        """
-        销毁 Agent。删除节点、所有关系。
-
-        权限检查：caller 需要 destroy_agent 权限，node_id 在 caller 子树内。
-        """
-        await self._check_permission(caller_id, "destroy_agent", node_id)
-
-        async with self.store.transaction():
-            # 删除所有关系
-            relations = await self.store.get_relations_for_node(node_id)
-            for rel in relations:
-                await self.store.delete_relation(rel.id)
-            # 删除节点
-            await self.store.delete_node(node_id)
-
-        async with self.store.transaction():
-            await self.event_bus.publish(Event(
-                id=str(uuid4()),
-                type="node.destroyed",
-                timestamp=self._now(),
-                source="system",
-                data={"node_id": node_id},
-            ))
-
-        logger.info("agent_destroyed", node_id=node_id)
-
-    # ═══ 人才池 ═══════════════════════════════════════════════════════════════
-
-    async def talent_pool_query(
-        self, caller_id: str, **filters
-    ) -> list[Node]:
-        """查询内部人才池（status=SUSPENDED 的节点）。需要 recruit 权限。"""
-        await self._check_permission(caller_id, "recruit")
-        async with self.store.transaction():
-            return await self.store.list_nodes(status=NodeStatus.SUSPENDED)
-
-    async def talent_pool_recruit(
+    async def query_actor_controls(
         self,
-        caller_id: str,
-        node_id: str,
-        parent_id: str,
-    ) -> Relation:
-        """
-        原子操作：激活节点 + 建立 REPORTS_TO + 自动 CONNECTED。
-
-        权限检查：caller 需要 recruit 权限。
-        """
-        await self._check_permission(caller_id, "recruit", parent_id)
-
-        now = self._now()
-
-        async with self.store.transaction():
-            # 激活节点
-            await self.store.update_node(node_id, status=NodeStatus.ONLINE)
-
-            # 建立 REPORTS_TO
-            rel = Relation(
-                id=str(uuid4()),
-                type=RelationType.REPORTS_TO,
-                node_a=parent_id,
-                node_b=node_id,
-                created_at=now,
+        *,
+        manager_actor_id: str | None = None,
+        desired_state: str | None = None,
+        runtime_kind: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        return self._dump_list(
+            await self.management.query_controls(
+                manager_actor_id=manager_actor_id,
+                desired_state=desired_state,
+                runtime_kind=runtime_kind,
+                limit=limit,
             )
-            await self.store.save_relation(rel)
+        )
 
-            # 自动建立同级 CONNECTED
-            siblings = await self.store.get_subordinates(parent_id)
-            for sib in siblings:
-                if sib.node_b != node_id:
-                    conn = Relation(
-                        id=str(uuid4()),
-                        type=RelationType.CONNECTED,
-                        node_a=node_id,
-                        node_b=sib.node_b,
-                        created_at=now,
-                    )
-                    await self.store.save_relation(conn)
+    async def assign_actor_manager(self, actor_id: str, manager_actor_id: str) -> dict:
+        return self._dump(await self.management.assign_manager(actor_id, manager_actor_id))
 
-        async with self.store.transaction():
-            await self.event_bus.publish(Event(
-                id=str(uuid4()),
-                type="node.recruited",
-                timestamp=now,
-                source="system",
-                data={"node_id": node_id, "parent_id": parent_id},
-            ))
+    async def set_actor_profile(self, actor_id: str, profile_id: str | None) -> dict:
+        return self._dump(await self.management.set_profile(actor_id, profile_id))
 
-        logger.info("agent_recruited", node_id=node_id, parent_id=parent_id)
-        return rel
+    async def set_actor_desired_state(self, actor_id: str, desired_state: str) -> dict:
+        return self._dump(await self.management.set_desired_state(actor_id, desired_state))
 
-    async def talent_pool_release(self, caller_id: str, node_id: str) -> None:
-        """
-        原子操作：解除 REPORTS_TO + 解除所有 CONNECTED + 状态设为 SUSPENDED。
+    async def submit_provision_request(self, spec: dict) -> dict:
+        return self._dump(await self.provisioning.submit_request(spec))
 
-        权限检查：caller 是 node_id 的直接上级，或有 recruit 权限。
-        """
-        is_superior = await self._is_direct_superior(caller_id, node_id)
-        if not is_superior:
-            await self._check_permission(caller_id, "recruit", node_id)
+    async def get_provision_request(self, request_id: str) -> dict | None:
+        return self._dump(await self.provisioning.get_request(request_id))
 
-        async with self.store.transaction():
-            # 删除所有关系
-            relations = await self.store.get_relations_for_node(node_id)
-            for rel in relations:
-                await self.store.delete_relation(rel.id)
-            # 设为 SUSPENDED
-            await self.store.update_node(node_id, status=NodeStatus.SUSPENDED)
+    async def claim_provision_request(
+        self,
+        request_id: str,
+        executor_actor_id: str,
+    ) -> bool:
+        return await self.provisioning.claim_request(request_id, executor_actor_id)
 
-        async with self.store.transaction():
-            await self.event_bus.publish(Event(
-                id=str(uuid4()),
-                type="node.released",
-                timestamp=self._now(),
-                source="system",
-                data={"node_id": node_id},
-            ))
+    async def query_provision_requests(self, **filters) -> list[dict]:
+        return self._dump_list(await self.provisioning.query_requests(**filters))
 
-        logger.info("agent_released", node_id=node_id)
+    async def execute_provision_request(
+        self,
+        request_id: str,
+        *,
+        executor_actor_id: str | None = None,
+    ) -> dict:
+        return self._dump(
+            await self.provisioning.execute_request(
+                request_id,
+                executor_actor_id=executor_actor_id,
+            )
+        )
 
-    # ═══ 审计 ═══════════════════════════════════════════════════════════════
+    async def get_provision_record(self, record_id: str) -> dict | None:
+        return self._dump(await self.provisioning.get_record(record_id))
 
-    async def audit_inspect(self, caller_id: str, target_id: str) -> dict:
-        """
-        查看目标节点的状态和记忆。
+    async def query_provision_records(self, **filters) -> list[dict]:
+        return self._dump_list(await self.provisioning.query_records(**filters))
 
-        权限检查：caller 是 target 的直接上级，或有 audit 权限且 target 在子树内。
-        """
-        is_superior = await self._is_direct_superior(caller_id, target_id)
-        if not is_superior:
-            await self._check_permission(caller_id, "audit", target_id)
-
-        async with self.store.transaction():
-            node = await self.store.get_node(target_id)
-            if node is None:
-                raise NodeNotFoundError(f"Node {target_id} not found")
-            relations = await self.store.get_relations_for_node(target_id)
-            tasks = await self.store.query_tasks(assignee=target_id)
-
+    async def request_actor_provision(self, spec: dict) -> dict:
+        blueprint = spec.get("blueprint", {})
+        blueprint_payload = self._dump(blueprint)
+        blueprint_name = (
+            blueprint_payload.get("name")
+            if isinstance(blueprint_payload, dict)
+            else None
+        )
+        work_item_spec = {
+            "kind": spec.get("work_item_kind", "PROVISION_ACTOR"),
+            "creator_actor_id": spec.get(
+                "creator_actor_id",
+                spec["requested_by_actor_id"],
+            ),
+            "owner_actor_id": spec.get(
+                "work_item_owner_actor_id",
+                spec["requested_by_actor_id"],
+            ),
+            "thread_id": spec.get("thread_id"),
+            "parent_work_item_id": spec.get("parent_work_item_id"),
+            "subject": spec.get(
+                "subject",
+                blueprint_name or "PROVISION_ACTOR",
+            ),
+            "spec": {
+                "blueprint": blueprint_payload,
+                "reason": spec.get("reason"),
+                "provisioner_hint": spec.get("provisioner_hint"),
+            },
+            "caller_actor_id": spec.get(
+                "caller_actor_id",
+                spec["requested_by_actor_id"],
+            ),
+            "bypass_policy": spec.get("bypass_policy", False),
+        }
+        if spec.get("work_item_id") is not None:
+            work_item_spec["id"] = spec["work_item_id"]
+        work_item = await self.create_work_item(work_item_spec)
+        work_item_id = work_item["work_item"]["id"]
+        request = await self.submit_provision_request({
+            **spec,
+            "work_item_id": work_item_id,
+        })
+        updated_work_item = work_item["work_item"]
+        if hasattr(self.store, "transaction") and hasattr(self.store, "update_work_item"):
+            async with self.store.transaction():
+                await self.store.update_work_item(
+                    work_item_id,
+                    result={"provision_request_id": request["id"]},
+                    updated_at=datetime.now(timezone.utc),
+                )
+                latest_work_item = await self.store.get_work_item(work_item_id)
+                if latest_work_item is not None:
+                    updated_work_item = self._dump(latest_work_item)
         return {
-            "node": node.model_dump(),
-            "relations": [r.model_dump() for r in relations],
-            "tasks": [t.model_dump() for t in tasks],
+            "work_item": updated_work_item,
+            "provision_request": request,
         }
 
-    # ═══ 关系 ═══════════════════════════════════════════════════════════════
-
-    async def relation_create(
+    async def process_provision_work_item(
         self,
-        caller_id: str,
-        node_a_id: str,
-        node_b_id: str,
-    ) -> Relation:
-        """
-        建立 CONNECTED 关系。
-
-        权限检查：caller 是 node_a 或 node_b 的上级。
-        """
-        is_sup_a = await self._is_direct_superior(caller_id, node_a_id)
-        is_sup_b = await self._is_direct_superior(caller_id, node_b_id)
-        # 也允许 caller 本身是其中之一
-        caller_node = await self._get_node_or_raise(caller_id)
-        if not (is_sup_a or is_sup_b or caller_node.is_owner):
-            raise PermissionDeniedError(
-                f"{caller_id} is not superior of {node_a_id} or {node_b_id}"
-            )
-
-        now = self._now()
-        rel = Relation(
-            id=str(uuid4()),
-            type=RelationType.CONNECTED,
-            node_a=node_a_id,
-            node_b=node_b_id,
-            created_at=now,
+        work_item_id: str,
+        *,
+        executor_actor_id: str,
+        auto_reconcile: bool = True,
+    ) -> dict:
+        return await self.provisioning_work_items.process(
+            work_item_id,
+            executor_actor_id=executor_actor_id,
+            auto_reconcile=auto_reconcile,
         )
 
-        async with self.store.transaction():
-            await self.store.save_relation(rel)
-
-        async with self.store.transaction():
-            await self.event_bus.publish(Event(
-                id=str(uuid4()),
-                type="relation.created",
-                timestamp=now,
-                source="system",
-                data={
-                    "relation_id": rel.id,
-                    "node_a": node_a_id,
-                    "node_b": node_b_id,
-                },
-            ))
-
-        return rel
-
-    async def relation_remove(self, caller_id: str, relation_id: str) -> None:
-        """
-        解除 CONNECTED 关系。
-
-        权限检查：caller 是关系双方之一的上级。
-        """
-        async with self.store.transaction():
-            rel = await self.store.get_relation(relation_id)
-        if rel is None:
-            from tyrant_core.models import RelationNotFoundError
-            raise RelationNotFoundError(f"Relation {relation_id} not found")
-
-        is_sup_a = await self._is_direct_superior(caller_id, rel.node_a)
-        is_sup_b = await self._is_direct_superior(caller_id, rel.node_b)
-        caller_node = await self._get_node_or_raise(caller_id)
-        if not (is_sup_a or is_sup_b or caller_node.is_owner):
-            raise PermissionDeniedError(
-                f"{caller_id} cannot remove relation {relation_id}"
-            )
-
-        async with self.store.transaction():
-            await self.store.delete_relation(relation_id)
-
-        async with self.store.transaction():
-            await self.event_bus.publish(Event(
-                id=str(uuid4()),
-                type="relation.removed",
-                timestamp=self._now(),
-                source="system",
-                data={"relation_id": relation_id},
-            ))
-
-    # ═══ 任务 ═══════════════════════════════════════════════════════════════
-
-    async def task_create(self, caller_id: str, task: Task) -> Task:
-        """创建任务。任何节点可为自己创建。"""
-        async with self.store.transaction():
-            await self.store.save_task(task)
-
-        async with self.store.transaction():
-            await self.event_bus.publish(Event(
-                id=str(uuid4()),
-                type="task.status_changed",
-                timestamp=self._now(),
-                source=caller_id,
-                data={"task_id": task.id, "status": task.status.value},
-            ))
-
-        return task
-
-    async def task_update(
-        self, caller_id: str, task_id: str, **fields
-    ) -> Task:
-        """更新任务。只有 creator 或 assignee 可更新。"""
-        async with self.store.transaction():
-            task = await self.store.get_task(task_id)
-        if task is None:
-            from tyrant_core.models import TaskNotFoundError
-            raise TaskNotFoundError(f"Task {task_id} not found")
-
-        if caller_id not in (task.creator, task.assignee):
-            # 检查是否是 owner
-            caller_node = await self._get_node_or_raise(caller_id)
-            if not caller_node.is_owner:
-                raise PermissionDeniedError(
-                    f"{caller_id} cannot update task {task_id}"
-                )
-
-        fields["updated_at"] = self._now()
-
-        async with self.store.transaction():
-            await self.store.update_task(task_id, **fields)
-            updated = await self.store.get_task(task_id)
-
-        if "status" in fields:
-            new_status = (
-                fields["status"].value
-                if hasattr(fields["status"], "value")
-                else fields["status"]
-            )
-            async with self.store.transaction():
-                await self.event_bus.publish(Event(
-                    id=str(uuid4()),
-                    type="task.status_changed",
-                    timestamp=self._now(),
-                    source=caller_id,
-                    data={"task_id": task_id, "status": new_status},
-                ))
-
-            # Task 完成/失败时自动通知创建者
-            if new_status in ("COMPLETED", "FAILED") and updated.creator != caller_id:
-                await self._notify_task_creator(updated)
-
-        return updated  # type: ignore[return-value]
-
-    async def _notify_task_creator(self, task: Task) -> None:
-        """Task 完成/失败时，系统自动给创建者发通知消息。"""
-        event_name = (
-            "task.completed"
-            if task.status == TaskStatus.COMPLETED
-            else "task.failed"
-        )
-        msg = Message(
-            id=str(uuid4()),
-            timestamp=self._now(),
-            from_node="system",
-            to=task.creator,
-            type="NOTIFICATION",
-            priority=Priority.SYSTEM,
-            content={
-                "event": event_name,
-                "task_id": task.id,
-                "result": task.result,
-                "assignee": task.assignee,
-            },
-            references=[
-                Reference(
-                    ref_type=RefType.TASK,
-                    ref_id=task.id,
-                    relation="origin",
-                )
-            ],
-        )
-        async with self.store.transaction():
-            await self.message_bus.send(msg, sender_id="system")
-
-    async def task_query(self, caller_id: str, **filters) -> list[Task]:
-        """查询任务。只返回 caller 有权限查看的任务。"""
-        async with self.store.transaction():
-            return await self.store.query_tasks(**filters)
-
-    # ═══ 消息 ═══════════════════════════════════════════════════════════════
-
-    async def send_message(
-        self, caller_id: str, message: Message
-    ) -> list[str]:
-        """发送消息。委托给 MessageBus。"""
-        async with self.store.transaction():
-            return await self.message_bus.send(message, sender_id=caller_id)
-
-    # ═══ 权限 ═══════════════════════════════════════════════════════════════
-
-    async def grant_permission(
+    async def process_next_provision_work_item(
         self,
-        caller_id: str,
-        target_id: str,
-        permission: Permission,
-    ) -> None:
-        """
-        v3: 向目标节点添加一条 Permission 条目。
-
-        权限检查：
-        - caller 需要 grant_permission 权限（对 target_id）
-        - caller 自身须拥有要授予的 action 权限
-        """
-        await self._check_permission(caller_id, "grant_permission", target_id)
-        await self._check_permission(caller_id, permission.action)
-
-        async with self.store.transaction():
-            target = await self.store.get_node(target_id)
-            if target is None:
-                raise NodeNotFoundError(f"Node {target_id} not found")
-            updated_perms = list(target.permissions) + [permission]
-            await self.store.update_node(target_id, permissions=updated_perms)
-
-        async with self.store.transaction():
-            await self.event_bus.publish(Event(
-                id=str(uuid4()),
-                type="permission.granted",
-                timestamp=self._now(),
-                source=caller_id,
-                data={
-                    "target_id": target_id,
-                    "permission": permission.model_dump(),
-                },
-            ))
-
-        logger.info(
-            "permission_granted",
-            caller_id=caller_id,
-            target_id=target_id,
-            action=permission.action,
+        *,
+        owner_actor_id: str,
+        executor_actor_id: str,
+        auto_reconcile: bool = True,
+        scan_limit: int = 20,
+    ) -> dict | None:
+        return await self._require_provisioning_queue().process_next(
+            owner_actor_id=owner_actor_id,
+            executor_actor_id=executor_actor_id,
+            auto_reconcile=auto_reconcile,
+            scan_limit=scan_limit,
         )
 
-    async def revoke_permission(
+    async def spawn_actor_runtime(self, actor_id: str) -> dict:
+        return await self._require_runtime_supervisor().spawn_actor_runtime(actor_id)
+
+    async def stop_actor_runtime(self, actor_id: str) -> None:
+        await self._require_runtime_supervisor().stop_actor_runtime(actor_id)
+
+    async def get_runtime_status(self, actor_id: str) -> dict | None:
+        return await self._require_runtime_supervisor().get_runtime_status(actor_id)
+
+    async def reconcile_actor(self, actor_id: str) -> bool:
+        return await self._require_reconciler().reconcile_actor(actor_id)
+
+    async def reconcile_all(self, *, limit: int = 1000) -> int:
+        return await self._require_reconciler().reconcile_all(limit=limit)
+
+    async def get_actor(self, actor_id: str) -> dict:
+        return await self.queries.get_actor(actor_id)
+
+    async def list_actors(self, **filters) -> list[dict]:
+        return await self.queries.list_actors(**filters)
+
+    async def list_org_edges(self, **filters) -> list[dict]:
+        return await self.queries.list_org_edges(**filters)
+
+    async def list_grants(self, subject_actor_id: str) -> list[dict]:
+        return await self.queries.list_grants(subject_actor_id)
+
+    async def get_thread(self, thread_id: str) -> dict:
+        return await self.queries.get_thread(thread_id)
+
+    async def get_envelope(self, envelope_id: str) -> dict:
+        return await self.queries.get_envelope(envelope_id)
+
+    async def query_envelopes(
         self,
-        caller_id: str,
-        target_id: str,
-        action: str,
-    ) -> None:
-        """
-        移除目标节点中指定 action 的所有 Permission 条目。
-
-        权限检查：caller 需要 grant_permission 权限（对 target_id）。
-        """
-        await self._check_permission(caller_id, "grant_permission", target_id)
-
-        async with self.store.transaction():
-            target = await self.store.get_node(target_id)
-            if target is None:
-                raise NodeNotFoundError(f"Node {target_id} not found")
-            updated_perms = [p for p in target.permissions if p.action != action]
-            await self.store.update_node(target_id, permissions=updated_perms)
-
-        logger.info(
-            "permission_revoked",
-            caller_id=caller_id,
-            target_id=target_id,
-            action=action,
-        )
-
-    # ═══ 委托 ═══════════════════════════════════════════════════════════════
-
-    async def create_delegation(
-        self,
-        caller_id: str,
-        delegate_id: str,
-        action: str,
-        scope: Scope,
-        one_time: bool = False,
-        expires_at: datetime | None = None,
-    ) -> Delegation:
-        """
-        创建委托：caller 将自己的权限委托给 delegate。
-
-        规则：
-        - caller 自身须拥有该 action 权限
-        - 委托 scope 必须在 caller 自身权限范围内（由 _check_permission 保证）
-        - 不可再委托（delegation 赋予的权限不能用于创建新 delegation）
-        """
-        # 验证 caller 自身有该权限（使用节点自身 permissions，不含 delegation）
-        node = await self._get_node_or_raise(caller_id)
-        if not node.is_owner:
-            has_action = any(
-                p.action in (action, "*") and p.effect == PermissionEffect.ALLOW
-                for p in node.permissions
-            )
-            if not has_action:
-                raise PermissionDeniedError(
-                    f"{caller_id} cannot delegate {action}: lacks own permission"
-                )
-
-        delegation = Delegation(
-            id=str(uuid4()),
-            delegator=caller_id,
-            delegate=delegate_id,
-            action=action,
-            scope=scope,
-            one_time=one_time,
-            expires_at=expires_at,
-            created_at=self._now(),
-        )
-
-        async with self.store.transaction():
-            await self.store.save_delegation(delegation)
-
-        async with self.store.transaction():
-            await self.event_bus.publish(Event(
-                id=str(uuid4()),
-                type="delegation.created",
-                timestamp=self._now(),
-                source=caller_id,
-                data={
-                    "delegation_id": delegation.id,
-                    "delegate": delegate_id,
-                    "action": action,
-                },
-            ))
-
-        logger.info(
-            "delegation_created",
-            delegator=caller_id,
-            delegate=delegate_id,
-            action=action,
-        )
-        return delegation
-
-    async def revoke_delegation(
-        self, caller_id: str, delegation_id: str,
-    ) -> None:
-        """
-        撤销委托。只有 delegator 或 Tyrant 可撤销。
-        """
-        async with self.store.transaction():
-            delegation = await self.store.get_delegation(delegation_id)
-        if delegation is None:
-            raise NodeNotFoundError(f"Delegation {delegation_id} not found")
-
-        caller = await self._get_node_or_raise(caller_id)
-        if delegation.delegator != caller_id and not caller.is_owner:
-            raise PermissionDeniedError(
-                f"{caller_id} cannot revoke delegation {delegation_id}"
-            )
-
-        async with self.store.transaction():
-            await self.store.delete_delegation(delegation_id)
-
-        logger.info(
-            "delegation_revoked",
-            caller_id=caller_id,
-            delegation_id=delegation_id,
-        )
-
-    # ═══ 消息查询 ═════════════════════════════════════════════════════════════════
-
-    async def _check_audit_permission(
-        self, caller_id: str, target_id: str,
-    ) -> None:
-        """
-        审计类权限检查：
-        - caller == target → 允许
-        - caller 是 target 的直接上级 → 允许
-        - 否则需要 audit 权限
-        """
-        if caller_id == target_id:
-            return
-        if await self._is_direct_superior(caller_id, target_id):
-            return
-        await self._check_permission(caller_id, "audit", target_id)
-
-    async def query_messages(
-        self,
-        caller_id: str,
-        node_id: str,
-        from_node: str | None = None,
-        to_node: str | None = None,
-        type: str | None = None,
+        *,
+        thread_id: str | None = None,
+        sender_actor_id: str | None = None,
         limit: int = 50,
-    ) -> list[Message]:
-        """
-        查询节点的消息。
-
-        权限：caller==node_id 则允许；直接上级允许；否则需要 audit 权限。
-        """
-        await self._check_audit_permission(caller_id, node_id)
-
-        async with self.store.transaction():
-            return await self.store.query_messages(
-                node_id=node_id,
-                from_node=from_node,
-                to_node=to_node,
-                type=type,
-                limit=limit,
-            )
-
-    async def query_conversation_history(
-        self,
-        caller_id: str,
-        target_id: str,
-        trigger_message_id: str | None = None,
-        limit: int = 50,
-    ) -> list[ConversationTurn]:
-        """
-        查询节点的 LLM 对话历史。
-
-        权限：同 query_messages。
-        """
-        await self._check_audit_permission(caller_id, target_id)
-
-        async with self.store.transaction():
-            return await self.store.query_conversation_turns(
-                node_id=target_id,
-                trigger_message_id=trigger_message_id,
-                limit=limit,
-            )
-
-    # ═══ 节点克隆 ═════════════════════════════════════════════════════════════════
-
-    async def clone_node(
-        self,
-        caller_id: str,
-        source_id: str,
-        parent_id: str,
-        name: str | None = None,
-    ) -> Node:
-        """
-        以 source 节点为模板创建新节点，复制 agent_config + permissions + tags。
-
-        权限检查：caller 需要 create_agent 权限。
-        """
-        await self._check_permission(caller_id, "create_agent", parent_id)
-
-        source = await self._get_node_or_raise(source_id)
-        clone_name = name or f"{source.name}-clone"
-        clone_config = source.metadata.get("agent_config")
-        # 复制 metadata（去掉运行时状态，保留 agent_config）
-        clone_metadata = {}
-        if clone_config:
-            clone_metadata["agent_config"] = clone_config
-
-        now = self._now()
-        node_id = str(uuid4())
-        node = Node(
-            id=node_id,
-            type=source.type,
-            name=clone_name,
-            endpoint=Endpoint(protocol="local", address=node_id),
-            status=NodeStatus.ONLINE,
-            permissions=list(source.permissions),
-            tags=list(source.tags),
-            metadata=clone_metadata,
-            created_at=now,
+    ) -> list[dict]:
+        return await self.queries.query_envelopes(
+            thread_id=thread_id,
+            sender_actor_id=sender_actor_id,
+            limit=limit,
         )
 
-        async with self.store.transaction():
-            await self.store.save_node(node)
-            # REPORTS_TO
-            await self.store.save_relation(Relation(
-                id=str(uuid4()),
-                type=RelationType.REPORTS_TO,
-                node_a=parent_id,
-                node_b=node_id,
-                config=clone_config or {},
-                created_at=now,
-            ))
-            # 自动 CONNECTED
-            siblings = await self.store.get_subordinates(parent_id)
-            for sib in siblings:
-                if sib.node_b != node_id:
-                    await self.store.save_relation(Relation(
-                        id=str(uuid4()),
-                        type=RelationType.CONNECTED,
-                        node_a=node_id,
-                        node_b=sib.node_b,
-                        created_at=now,
-                    ))
+    async def get_delivery(self, delivery_id: str) -> dict:
+        return await self.queries.get_delivery(delivery_id)
 
-        async with self.store.transaction():
-            await self.event_bus.publish(Event(
-                id=str(uuid4()),
-                type="node.cloned",
-                timestamp=now,
-                source="system",
-                data={"node_id": node_id, "source_id": source_id, "parent_id": parent_id},
-            ))
+    async def list_pending_deliveries(self, actor_id: str) -> list[dict]:
+        return await self.queries.list_pending_deliveries(actor_id)
 
-        logger.info("node_cloned", node_id=node_id, source_id=source_id)
-        return node
-
-    # ═══ 节点查询 ═════════════════════════════════════════════════════════════════
-
-    async def list_nodes(
+    async def query_deliveries(
         self,
-        caller_id: str,
-        tags: list[str] | None = None,
-        type: NodeType | None = None,
-        status: NodeStatus | None = None,
-    ) -> list[Node]:
-        """查询节点列表。可按 tags/type/status 过滤。任何节点可调用。"""
-        filters: dict = {}
-        if tags:
-            filters["tags"] = tags
-        if type:
-            filters["type"] = type
-        if status:
-            filters["status"] = status
-        async with self.store.transaction():
-            return await self.store.list_nodes(**filters)
+        *,
+        actor_id: str | None = None,
+        state: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        return await self.queries.query_deliveries(
+            actor_id=actor_id,
+            state=state,
+            limit=limit,
+        )
 
-    # ═══ 事件 ═════════════════════════════════════════════════════════════════════
+    async def get_work_item(self, work_item_id: str) -> dict:
+        return await self.queries.get_work_item(work_item_id)
 
-    async def publish_event(self, caller_id: str, event: Event) -> None:
-        """Agent 发布自定义事件。source 由系统填充为 caller_id。"""
-        event = event.model_copy(update={"source": caller_id})
-        async with self.store.transaction():
-            await self.event_bus.publish(event)
+    async def query_work_items(
+        self,
+        *,
+        owner_actor_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        return await self.queries.query_work_items(
+            owner_actor_id=owner_actor_id,
+            status=status,
+            limit=limit,
+        )
+
+    async def query_sessions(
+        self,
+        *,
+        actor_id: str | None = None,
+        surface: str | None = None,
+        external_key: str | None = None,
+        state: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        return await self.queries.query_sessions(
+            actor_id=actor_id,
+            surface=surface,
+            external_key=external_key,
+            state=state,
+            limit=limit,
+        )
+
+    async def query_attachments(
+        self,
+        *,
+        actor_id: str | None = None,
+        kind: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        return await self.queries.query_attachments(
+            actor_id=actor_id,
+            kind=kind,
+            limit=limit,
+        )
+
+    async def get_presence(self, attachment_id: str) -> dict | None:
+        return await self.queries.get_presence(attachment_id)
+
+    async def get_domain_events(self, *, since=None, limit: int = 100) -> list[dict]:
+        return await self.queries.get_domain_events(since=since, limit=limit)
+
+    async def can(
+        self,
+        action: str,
+        subject_actor_id: str,
+        target_id: str | None = None,
+    ) -> PolicyDecision:
+        return await self.policies.can(action, subject_actor_id, target_id=target_id)

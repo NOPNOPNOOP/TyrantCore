@@ -1,4 +1,4 @@
-"""零依赖模块。所有实体的 Pydantic 模型定义 + Enum + 异常。"""
+"""v2 核心领域模型。"""
 
 from __future__ import annotations
 
@@ -8,34 +8,45 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 
-# ── Enums ──────────────────────────────────────────────────────────────────
-
-
-class NodeType(str, Enum):
+class ActorKind(str, Enum):
+    TYRANT = "TYRANT"
     HUMAN = "HUMAN"
-    LOCAL_AGENT = "LOCAL_AGENT"
-    EXTERNAL_AGENT = "EXTERNAL_AGENT"
+    AGENT = "AGENT"
+    SERVICE = "SERVICE"
     TERMINAL = "TERMINAL"
+    EXTERNAL = "EXTERNAL"
 
 
-class NodeStatus(str, Enum):
-    ONLINE = "ONLINE"
-    BUSY = "BUSY"
-    OFFLINE = "OFFLINE"
-    SUSPENDED = "SUSPENDED"
-
-
-class RelationType(str, Enum):
+class OrgEdgeKind(str, Enum):
     REPORTS_TO = "REPORTS_TO"
-    CONNECTED = "CONNECTED"
+    MEMBER_OF = "MEMBER_OF"
 
 
-class TaskStatus(str, Enum):
-    PENDING = "PENDING"
-    IN_PROGRESS = "IN_PROGRESS"
-    BLOCKED = "BLOCKED"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
+class GrantEffect(str, Enum):
+    ALLOW = "ALLOW"
+    DENY = "DENY"
+
+
+class GrantScopeType(str, Enum):
+    GLOBAL = "GLOBAL"
+    SUBTREE = "SUBTREE"
+    ACTORS = "ACTORS"
+    THREADS = "THREADS"
+    WORK_ITEMS = "WORK_ITEMS"
+
+
+class GrantSourceType(str, Enum):
+    DIRECT = "DIRECT"
+    DELEGATED = "DELEGATED"
+    IMPLICIT = "IMPLICIT"
+    SYSTEM = "SYSTEM"
+
+
+class ThreadKind(str, Enum):
+    DIALOG = "DIALOG"
+    TASK = "TASK"
+    SYSTEM = "SYSTEM"
+    INCIDENT = "INCIDENT"
 
 
 class Priority(int, Enum):
@@ -45,167 +56,398 @@ class Priority(int, Enum):
     LOW = 3
 
 
-class RefType(str, Enum):
-    MESSAGE = "MESSAGE"
-    TASK = "TASK"
-    NODE = "NODE"
+class ReferenceType(str, Enum):
+    ACTOR = "ACTOR"
+    THREAD = "THREAD"
+    ENVELOPE = "ENVELOPE"
+    DELIVERY = "DELIVERY"
+    WORK_ITEM = "WORK_ITEM"
 
 
-class ScopeType(str, Enum):
-    SELF_SUBTREE = "self_subtree"  # 自身子树
-    GLOBAL = "global"              # 全局
-    SUBTREES = "subtrees"          # 指定节点的子树内
-    NODES = "nodes"                # 精确到指定节点
+class DeliveryState(str, Enum):
+    PENDING = "PENDING"
+    LEASED = "LEASED"
+    DELIVERING = "DELIVERING"
+    DELIVERED = "DELIVERED"
+    ACKED = "ACKED"
+    FAILED = "FAILED"
+    DEAD_LETTER = "DEAD_LETTER"
 
 
-class PermissionEffect(str, Enum):
-    ALLOW = "allow"
-    DENY = "deny"
+class BindingThreadPolicy(str, Enum):
+    REUSE = "REUSE"
+    NEW_PER_MESSAGE = "NEW_PER_MESSAGE"
+    BY_PEER = "BY_PEER"
+    BY_TASK = "BY_TASK"
 
 
-# ── 嵌套结构 ─────────────────────────────────────────────────────────────
+class SessionMode(str, Enum):
+    PERSISTENT = "PERSISTENT"
+    EPHEMERAL = "EPHEMERAL"
 
 
-class Endpoint(BaseModel):
-    protocol: str  # "local" / "adapter"
-    address: str  # 地址或适配器ID
-    config: dict = {}  # 适配器特有配置
+class SessionState(str, Enum):
+    OPEN = "OPEN"
+    IDLE = "IDLE"
+    CLOSED = "CLOSED"
 
 
-class Scope(BaseModel):
-    type: ScopeType = ScopeType.SELF_SUBTREE
-    targets: list[str] = []  # 仅 SUBTREES / NODES 时使用
+class AttachmentKind(str, Enum):
+    LOCAL_RUNTIME = "LOCAL_RUNTIME"
+    TERMINAL = "TERMINAL"
+    UI = "UI"
+    CONNECTOR = "CONNECTOR"
+    WEBHOOK = "WEBHOOK"
 
 
-class Permission(BaseModel):
-    action: str  # "create_agent" / "audit" / "*" / ...
-    effect: PermissionEffect = PermissionEffect.ALLOW
-    scope: Scope = Field(default_factory=Scope)
+class AttachmentDesiredState(str, Enum):
+    ACTIVE = "ACTIVE"
+    PAUSED = "PAUSED"
+    DETACHED = "DETACHED"
+
+
+class PresenceStatus(str, Enum):
+    ONLINE = "ONLINE"
+    BUSY = "BUSY"
+    OFFLINE = "OFFLINE"
+    DEGRADED = "DEGRADED"
+
+
+class WorkItemStatus(str, Enum):
+    PENDING = "PENDING"
+    IN_PROGRESS = "IN_PROGRESS"
+    BLOCKED = "BLOCKED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELED = "CANCELED"
+
+
+class ProvisionStatus(str, Enum):
+    PENDING = "PENDING"
+    CLAIMED = "CLAIMED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELED = "CANCELED"
+
+
+class DesiredState(str, Enum):
+    ACTIVE = "ACTIVE"
+    PAUSED = "PAUSED"
+    DETACHED = "DETACHED"
+    ARCHIVED = "ARCHIVED"
+
+
+class ActivationPolicy(str, Enum):
+    MANUAL = "MANUAL"
+    AUTO_START = "AUTO_START"
+    LAZY = "LAZY"
+
+
+class RuntimeKind(str, Enum):
+    LOCAL = "LOCAL"
+    TERMINAL = "TERMINAL"
+    REMOTE = "REMOTE"
+    EXTERNAL = "EXTERNAL"
 
 
 class Reference(BaseModel):
-    ref_type: RefType
+    ref_type: ReferenceType
     ref_id: str
-    relation: str  # "reply_to" / "origin" / "parent" / "attachment" / "related"
+    relation: str
 
 
-# ── 核心实体 ───────────────────────────────────────────────────────────────
+class GrantScope(BaseModel):
+    type: GrantScopeType = GrantScopeType.GLOBAL
+    targets: list[str] = Field(default_factory=list)
 
 
-class Node(BaseModel):
-    id: str  # uuid4
-    type: NodeType
+class Actor(BaseModel):
+    id: str
+    kind: ActorKind
     name: str
-    is_owner: bool = False
-    endpoint: Endpoint
-    status: NodeStatus = NodeStatus.OFFLINE
-    permissions: list[Permission] = []  # v3: 显式作用域权限列表
-    tags: list[str] = []  # v5: 服务发现标签
-    metadata: dict = {}
+    slug: str
+    org_role: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
     created_at: datetime
+    archived_at: datetime | None = None
 
 
-class Relation(BaseModel):
-    id: str  # uuid4
-    type: RelationType
-    node_a: str  # REPORTS_TO: 上级; CONNECTED: 任意
-    node_b: str  # REPORTS_TO: 下级
-    config: dict = {}
+class OrgEdge(BaseModel):
+    id: str
+    kind: OrgEdgeKind
+    src_actor_id: str
+    dst_actor_id: str
+    metadata: dict = Field(default_factory=dict)
     created_at: datetime
+    ended_at: datetime | None = None
 
 
-class Message(BaseModel):
-    id: str  # uuid4
-    timestamp: datetime
+class Grant(BaseModel):
+    id: str
+    subject_actor_id: str
+    action: str
+    effect: GrantEffect = GrantEffect.ALLOW
+    scope: GrantScope = Field(default_factory=GrantScope)
+    source_type: GrantSourceType = GrantSourceType.DIRECT
+    source_actor_id: str | None = None
+    delegable: bool = False
     expires_at: datetime | None = None
-    from_node: str  # 发送者节点ID
-    to: str | list[str]  # 接收者
-    type: str = "CHAT"
-    priority: Priority = Priority.NORMAL
-    content: dict = {}
-    references: list[Reference] = []
-    thread_id: str | None = None
-    requires_ack: bool = False
-
-    model_config = {
-        "populate_by_name": True,
-    }
-
-
-class Task(BaseModel):
-    id: str  # uuid4
-    creator: str
-    assignee: str
-    participants: list[str] = []
-    status: TaskStatus = TaskStatus.PENDING
-    content: dict = {}
-    result: dict = {}  # 执行结果（完成者填写）
-    parent_task: str | None = None
-    references: list[Reference] = []
     created_at: datetime
+    revoked_at: datetime | None = None
+
+
+class Thread(BaseModel):
+    id: str
+    kind: ThreadKind = ThreadKind.DIALOG
+    subject: str = ""
+    created_by: str
+    participants: list[str] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+    created_at: datetime
+    closed_at: datetime | None = None
+
+
+class Envelope(BaseModel):
+    id: str
+    thread_id: str
+    sender_actor_id: str
+    kind: str = "CHAT"
+    payload: dict = Field(default_factory=dict)
+    priority: Priority = Priority.NORMAL
+    correlation_id: str | None = None
+    idempotency_key: str | None = None
+    references: list[Reference] = Field(default_factory=list)
+    created_at: datetime
+    expires_at: datetime | None = None
+
+
+class Delivery(BaseModel):
+    id: str
+    envelope_id: str
+    recipient_actor_id: str
+    target_attachment_id: str | None = None
+    state: DeliveryState = DeliveryState.PENDING
+    attempt_count: int = 0
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
+    delivered_at: datetime | None = None
+    acked_at: datetime | None = None
+    next_retry_at: datetime | None = None
+    last_error: dict | None = None
+    created_at: datetime
+
+
+class Binding(BaseModel):
+    id: str
+    surface: str
+    account_id: str | None = None
+    peer: str | None = None
+    actor_id: str
+    thread_policy: BindingThreadPolicy = BindingThreadPolicy.REUSE
+    fixed_thread_id: str | None = None
+    priority: int = 0
+    metadata: dict = Field(default_factory=dict)
+    created_at: datetime
+    disabled_at: datetime | None = None
+
+
+class Session(BaseModel):
+    id: str
+    surface: str
+    binding_id: str | None = None
+    actor_id: str
+    external_key: str
+    thread_id: str | None = None
+    mode: SessionMode = SessionMode.PERSISTENT
+    state: SessionState = SessionState.OPEN
+    metadata: dict = Field(default_factory=dict)
+    created_at: datetime
+    last_seen_at: datetime
+    closed_at: datetime | None = None
+
+
+class Attachment(BaseModel):
+    id: str
+    actor_id: str
+    kind: AttachmentKind
+    endpoint: dict = Field(default_factory=dict)
+    capabilities: list[str] = Field(default_factory=list)
+    desired_state: AttachmentDesiredState = AttachmentDesiredState.ACTIVE
+    created_at: datetime
+    detached_at: datetime | None = None
+
+
+class Presence(BaseModel):
+    attachment_id: str
+    actor_id: str
+    gateway_id: str
+    status: PresenceStatus = PresenceStatus.ONLINE
+    leases: int = 0
+    last_heartbeat_at: datetime
+
+
+class WorkItem(BaseModel):
+    id: str
+    kind: str = "TASK"
+    creator_actor_id: str
+    owner_actor_id: str
+    thread_id: str
+    parent_work_item_id: str | None = None
+    status: WorkItemStatus = WorkItemStatus.PENDING
+    spec: dict = Field(default_factory=dict)
+    result: dict = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None = None
+
+
+class ActorBlueprint(BaseModel):
+    name: str
+    kind: ActorKind = ActorKind.AGENT
+    parent_actor_id: str
+    org_role: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+    profile_id: str | None = None
+    manager_actor_id: str | None = None
+    grant_template: str | None = None
+    bootstrap_spec: dict = Field(default_factory=dict)
+    runtime_spec: dict = Field(default_factory=dict)
+
+
+class ProvisionRequest(BaseModel):
+    id: str
+    requested_by_actor_id: str
+    target_parent_actor_id: str
+    manager_actor_id: str | None = None
+    profile_id: str | None = None
+    provisioner_hint: str | None = None
+    priority: int = 0
+    status: ProvisionStatus = ProvisionStatus.PENDING
+    idempotency_key: str | None = None
+    reason: str | None = None
+    blueprint: ActorBlueprint
+    work_item_id: str | None = None
+    claimed_by_actor_id: str | None = None
+    claimed_at: datetime | None = None
+    created_at: datetime
+    closed_at: datetime | None = None
+
+
+class ProvisionRecord(BaseModel):
+    id: str
+    request_id: str
+    provisioner_name: str
+    executor_actor_id: str | None = None
+    produced_actor_id: str | None = None
+    org_edge_id: str | None = None
+    control_id: str | None = None
+    bootstrap_thread_id: str | None = None
+    attachment_id: str | None = None
+    state: ProvisionStatus = ProvisionStatus.RUNNING
+    attempt_count: int = 0
+    last_error: dict | None = None
+    notes: dict = Field(default_factory=dict)
+    created_at: datetime
+    finished_at: datetime | None = None
+
+
+class ActorProfile(BaseModel):
+    id: str
+    name: str
+    instruction: str = ""
+    toolsets: list[str] = Field(default_factory=list)
+    model_ref: str | None = None
+    session_mode: SessionMode = SessionMode.PERSISTENT
+    runtime_kind: RuntimeKind = RuntimeKind.LOCAL
+    memory_policy: dict = Field(default_factory=dict)
+    bootstrap_policy: dict = Field(default_factory=dict)
+    created_at: datetime
+    archived_at: datetime | None = None
+
+
+class ActorControl(BaseModel):
+    id: str
+    actor_id: str
+    manager_actor_id: str
+    profile_id: str | None = None
+    desired_state: DesiredState = DesiredState.ACTIVE
+    activation_policy: ActivationPolicy = ActivationPolicy.AUTO_START
+    runtime_kind: RuntimeKind = RuntimeKind.LOCAL
+    placement: dict = Field(default_factory=dict)
+    limits: dict = Field(default_factory=dict)
     updated_at: datetime
 
 
-class Delegation(BaseModel):
-    id: str  # uuid4
-    delegator: str  # 谁授权
-    delegate: str  # 谁被授权
-    action: str  # 授权的动作
-    scope: Scope
-    one_time: bool = False
-    expires_at: datetime | None = None
+class DomainEvent(BaseModel):
+    id: str
+    type: str
+    source: str
+    payload: dict = Field(default_factory=dict)
     created_at: datetime
 
 
-class ConversationTurn(BaseModel):
-    id: str  # uuid4
-    node_id: str  # 所属 agent
-    role: str  # "user" | "model" | "tool_call" | "tool_result"
-    content: str = ""  # 文本内容
-    tool_calls: list[dict] = []  # role=model 时：[{name, args}]
-    tool_result: dict = {}  # role=tool_result 时：{name, result}
-    trigger_message_id: str | None = None  # 触发的 TyrantCore Message ID
-    timestamp: datetime
-
-
-class Event(BaseModel):
-    id: str  # uuid4
-    type: str  # "node.status_changed" / 自定义
-    timestamp: datetime
-    source: str  # 节点ID 或 "system"
-    data: dict = {}
-
-
-# ── 异常 ───────────────────────────────────────────────────────────────────
-
-
 class TyrantError(Exception):
-    """TyrantCore 所有自定义异常的基类。"""
-
-
-class NodeNotFoundError(TyrantError):
-    pass
-
-
-class RelationNotFoundError(TyrantError):
-    pass
-
-
-class MessageNotFoundError(TyrantError):
-    pass
-
-
-class TaskNotFoundError(TyrantError):
-    pass
-
-
-class PermissionDeniedError(TyrantError):
-    pass
-
-
-class RoutingError(TyrantError):
-    pass
+    """TyrantCore v2 所有自定义异常的基类。"""
 
 
 class ValidationError(TyrantError):
+    pass
+
+
+class ActorNotFoundError(TyrantError):
+    pass
+
+
+class OrgEdgeNotFoundError(TyrantError):
+    pass
+
+
+class GrantNotFoundError(TyrantError):
+    pass
+
+
+class ThreadNotFoundError(TyrantError):
+    pass
+
+
+class EnvelopeNotFoundError(TyrantError):
+    pass
+
+
+class DeliveryNotFoundError(TyrantError):
+    pass
+
+
+class WorkItemNotFoundError(TyrantError):
+    pass
+
+
+class ActorProfileNotFoundError(TyrantError):
+    pass
+
+
+class ActorControlNotFoundError(TyrantError):
+    pass
+
+
+class ProvisionRequestNotFoundError(TyrantError):
+    pass
+
+
+class ProvisionRecordNotFoundError(TyrantError):
+    pass
+
+
+class PolicyDeniedError(TyrantError):
+    pass
+
+
+class BindingResolutionError(TyrantError):
+    pass
+
+
+class UnsupportedLegacyComponentError(TyrantError):
     pass

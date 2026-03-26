@@ -1,5 +1,7 @@
 # adapters/cli.py — CLI 适配器
 
+> 注意：本文描述的是 v1 / legacy CLI 适配器，当前活跃实现请优先阅读 [`docs/architecture-v2.md`](../architecture-v2.md) 与 [`docs/v2-execution-plan.md`](../v2-execution-plan.md)。
+
 依赖：api, message_bus, models, runtime, prompt_toolkit, rich
 
 ## 职责

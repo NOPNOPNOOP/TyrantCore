@@ -1,5 +1,7 @@
 # bus/message_bus.py — 消息总线
 
+> 注意：本文描述的是 v1 / legacy 消息总线。v2 默认实现已经退役 `MessageBus`，并改为 `Gateway + Delivery` 控制平面。
+
 依赖：store, models, event_bus
 
 ## 职责

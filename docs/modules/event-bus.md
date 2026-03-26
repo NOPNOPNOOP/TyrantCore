@@ -1,5 +1,7 @@
 # bus/event_bus.py — 事件总线
 
+> 注意：本文描述的是 v1 / legacy 事件总线文档，当前活跃实现请优先阅读 [`docs/architecture-v2.md`](../architecture-v2.md) 与 [`docs/v2-execution-plan.md`](../v2-execution-plan.md)。
+
 依赖：store, models
 
 ## 职责

@@ -2,6 +2,10 @@
 
 > 通信/关系网络基础设施，支持以人为核心、动态扩展的 AI Agent 组织
 
+> 状态说明：
+> 本文描述的是 v1 / legacy 架构，现已不再代表默认活跃实现。
+> 当前默认实现请优先阅读 [`docs/architecture-v2.md`](architecture-v2.md)。
+
 ## 设计哲学
 
 TyrantCore 是**基础设施层**——造公路和交通规则，Agent 自己决定怎么开车。

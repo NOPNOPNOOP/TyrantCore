@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  active-tests:
+    name: ${{ matrix.lane.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - name: v2_acceptance
+            marker: v2_acceptance
+            cov_report: coverage-v2-acceptance.xml
+          - name: v2_unit
+            marker: v2_unit
+            cov_report: coverage-v2-unit.xml
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Dependencies
+        run: uv sync --dev
+
+      - name: Run Tests
+        run: >
+          uv run pytest -m "${{ matrix.lane.marker }}"
+          --cov=tyrant_core
+          --cov-report=term-missing
+          --cov-report=xml:${{ matrix.lane.cov_report }}
+          -q
+
+      - name: Upload Coverage Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.lane.name }}-coverage
+          path: ${{ matrix.lane.cov_report }}
+
+  compatibility-tests:
+    name: ${{ matrix.lane.name }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - name: legacy
+            marker: legacy
+          - name: experimental
+            marker: experimental
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Dependencies
+        run: uv sync --dev
+
+      - name: Run Compatibility Lane
+        run: >
+          uv run pytest -m "${{ matrix.lane.marker }}"
+          --continue-on-collection-errors
+          -q

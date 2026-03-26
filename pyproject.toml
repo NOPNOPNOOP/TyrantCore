@@ -16,12 +16,14 @@ dependencies = [
     "prompt-toolkit",
     "structlog",
     "litellm",
+    "websockets>=15.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest",
     "pytest-asyncio",
+    "pytest-cov",
 ]
 
 [build-system]
@@ -30,3 +32,28 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = [
+    "v2_acceptance: v2 活跃实现的验收/集成测试",
+    "v2_unit: v2 活跃实现的组件/单元测试",
+    "legacy: legacy / v1 参考区测试，当前不作为 v2 默认放行口径",
+    "experimental: 实验性测试，允许单独演进，不进入默认放行门",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["tyrant_core"]
+omit = [
+    "src/tyrant_core/legacy/*",
+    "src/tyrant_core/legacy_main.py",
+    "tests/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+omit = [
+    "src/tyrant_core/legacy/*",
+    "src/tyrant_core/legacy_main.py",
+]

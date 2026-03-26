@@ -69,6 +69,21 @@
 - 通用 prompt 加 list_nodes 服务发现提示
 - 174 tests passed
 
+## 调研记录
+
+- 2026-03-18：新增 [`docs/investigation-20260318.md`](investigation-20260318.md)，记录一次针对仓库结构、核心调用链、已实现能力、风险点与修复优先级的集中调查。
+- 2026-03-24：新增 [`docs/architecture-v2.md`](architecture-v2.md)，提出一版不以兼容 v1 为目标的 TyrantCore v2 对象模型与模块设计稿，核心方向是 `Actor / Grant / Thread / Envelope / Delivery / Binding / Session / WorkItem` + 独立 `gateway/` 控制平面。
+- 2026-03-24：新增 [`docs/v2-execution-plan.md`](v2-execution-plan.md)，把 v2 重构拆成分阶段执行计划，并已完成 `legacy` 参考区冻结与 v2 gateway/api/bus/runtime 骨架初始化。
+- 2026-03-24：活跃命名空间已切到 v2 scaffold：`models.py` 改为 v2 领域对象，`store/api/bus/runtime` 默认实现改为 v2 占位实现，`python -m tyrant_core` 现已走 v2 入口。
+- 2026-03-24：完成 Phase 3 的最小闭环：`CommandAPI / QueryAPI` 接入共享 Store，`GatewayServer + DeliveryEngine` 打通 delivery lease/ack，新增 embedded CLI connector 与 local runtime consumer，并通过 [`tests/test_v2_gateway_flow.py`](../tests/test_v2_gateway_flow.py) 验证往返链路。
+- 2026-03-24：补完当前范围内的 Phase 4：新增 `tyrant_core.legacy_main` 显式 legacy 入口，`README.md` 默认说明切到 v2，`docs/architecture.md` 标记为 v1/legacy 参考文档，`tests/README.md` 明确旧测试不再作为 v2 默认验收基线。
+- 2026-03-25：`src/tyrant_core/store/sqlite_store.py` 已替换为真实的 v2 SQLite 持久化实现，表结构对齐 `Actor / OrgEdge / Grant / Thread / Envelope / Delivery / Binding / Session / Attachment / Presence / WorkItem / DomainEvent`。
+- 2026-03-25：`BindingResolver` 与 `SessionRegistry` 已改为 store-backed 实现，`GatewayServer` 启停过程现会统一管理 store lifecycle，CLI 会话 thread 绑定可跨重启复用。
+- 2026-03-25：新增 [`tests/test_v2_store.py`](../tests/test_v2_store.py) 与 [`tests/test_v2_gateway_recovery.py`](../tests/test_v2_gateway_recovery.py)，v2 当前默认验收已覆盖持久化、delivery 状态机与 gateway 重启恢复。
+- 2026-03-25：`SystemAPI / CommandAPI / QueryAPI` 已补齐 `OrgEdge / Grant / Attachment / Presence / WorkItem / PolicyEngine` 等 v2 核心对象边界，不再只有 `Actor / Thread / Envelope` 可操作。
+- 2026-03-25：活跃适配器 [`src/tyrant_core/adapters/cli.py`](../src/tyrant_core/adapters/cli.py) 与 [`src/tyrant_core/adapters/terminal_node.py`](../src/tyrant_core/adapters/terminal_node.py) 已完成 v2 重写，彻底去除对 `Node / MessageBus` 的活跃依赖。
+- 2026-03-25：新增 [`tests/test_v2_core_api.py`](../tests/test_v2_core_api.py) 与 [`tests/test_v2_adapters.py`](../tests/test_v2_adapters.py)，v2 默认验收现覆盖核心对象 API、grant/policy 与活跃 adapter。
+
 ---
 
 ## Roadmap

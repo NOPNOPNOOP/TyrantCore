@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     )
     terminal_output_aggregation_ms: int = Field(
         default=500,
-        description="TerminalNode 输出聚合时间窗口（毫秒）",
+        description="terminal attachment 输出聚合时间窗口（毫秒）",
     )
 
     def get_litellm_model(self) -> str:

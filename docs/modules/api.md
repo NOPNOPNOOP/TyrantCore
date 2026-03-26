@@ -1,5 +1,7 @@
 # api/system_api.py — 系统 API
 
+> 注意：本文描述的是 v1 / legacy API 形态，当前活跃实现请优先阅读 [`docs/architecture-v2.md`](../architecture-v2.md) 与 [`docs/v2-execution-plan.md`](../v2-execution-plan.md)。
+
 依赖：store, message_bus, event_bus, models
 
 ## 职责
