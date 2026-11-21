@@ -1,0 +1,533 @@
+系统信息快照
+采集时间: 2026-11-21 13:11:23 CST (+0800)
+采集主机: all-in-one-82-g8j6l
+
+
+==============================================================================
+## 1. 基本系统
+==============================================================================
+
+--- 发行版 ---
+PRETTY_NAME="Ubuntu 24.04 LTS"
+NAME="Ubuntu"
+VERSION_ID="24.04"
+VERSION="24.04 LTS (Noble Numbat)"
+VERSION_CODENAME=noble
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=noble
+LOGO=ubuntu-logo
+
+--- 内核 / 架构 ---
+Linux all-in-one-82-g8j6l 6.18.5 #1 SMP Wed Jan 28 20:01:07 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+
+--- 主机名 / 硬件平台 ---
+hostname: all-in-one-82-g8j6l
+FQDN    : all-in-one-82-g8j6l
+arch    : x86_64
+
+--- 运行时长 / 负载 ---
+ 13:11:23 up 17 min,  0 user,  load average: 0.72, 0.56, 0.37
+0.72 0.56 0.37 1/227 46559
+
+--- 启动参数 ---
+tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 i8042.dumbkbd=1 i8042.nopnp=1 i8042.noaux=1 noreplace-smp reboot=k cryptomgr.notests net.ifnames=0 pci=lastbus=0 root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro ro rootfstype=ext4 console=hvc0 console=hvc1 quiet systemd.show_status=false panic=1 nr_cpus=240 selinux=0 systemd.unit=kata-containers.target systemd.mask=systemd-networkd.service systemd.mask=systemd-networkd.socket scsi_mod.scan=none agent.cdh_api_timeout=50 cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1
+
+--- 虚拟化 / 容器检测 ---
+虚拟化: docker
+cgroup: cgroup2fs
+容器: Kubernetes Pod (node=all-in-one-82-g8j6l, ns=?)
+PID1: tini
+
+
+==============================================================================
+## 2. CPU
+==============================================================================
+
+--- lscpu ---
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           52 bits physical, 57 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  3
+On-line CPU(s) list:                     0,238,239
+Vendor ID:                               GenuineIntel
+BIOS Vendor ID:                          QEMU
+Model name:                              INTEL(R) XEON(R) PLATINUM 8582C
+BIOS Model name:                         pc-q35-10.2  CPU @ 2.0GHz
+BIOS CPU family:                         1
+CPU family:                              6
+Model:                                   207
+Thread(s) per core:                      1
+Core(s) per socket:                      1
+Socket(s):                               3
+Stepping:                                2
+BogoMIPS:                                5200.00
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss syscall nx pdpe1gb rdtscp lm rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault ssbd ibrs ibpb stibp ibrs_enhanced fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx_vnni avx512_bf16 wbnoinvd arat avx512vbmi umip pku waitpkg avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid bus_lock_detect cldemote movdiri movdir64b fsrm md_clear serialize tsxldtrk avx512_fp16 arch_capabilities
+Hypervisor vendor:                       KVM
+Virtualization type:                     full
+L1d cache:                               96 KiB (3 instances)
+L1i cache:                               96 KiB (3 instances)
+L2 cache:                                12 MiB (3 instances)
+L3 cache:                                48 MiB (3 instances)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0,238,239
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Ghostwrite:                Not affected
+Vulnerability Indirect target selection: Vulnerable
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Not affected
+Vulnerability Old microcode:             Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Not affected
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Vulnerable
+Vulnerability Spectre v1:                Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers
+Vulnerability Spectre v2:                Vulnerable; IBPB: disabled; STIBP: disabled; PBRSB-eIBRS: Vulnerable; BHI: Vulnerable
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Mitigation; TSX disabled
+Vulnerability Vmscape:                   Not affected
+
+--- 物理核心 / 逻辑核心 / 型号 ---
+逻辑核心数: 3
+型号      : INTEL(R) XEON(R) PLATINUM 8582C
+插槽数    : 3
+物理核心  : 1
+
+--- CPU 频率 ---
+cpu MHz		: 2600.000
+cpu MHz		: 2600.000
+cpu MHz		: 2600.000
+
+--- 缓存 ---
+L1d cache:                               96 KiB (3 instances)
+L1i cache:                               96 KiB (3 instances)
+L2 cache:                                12 MiB (3 instances)
+L3 cache:                                48 MiB (3 instances)
+
+
+==============================================================================
+## 3. 内存 / Swap
+==============================================================================
+
+--- free -h ---
+               total        used        free      shared  buff/cache   available
+Mem:           5.8Gi       634Mi       4.3Gi        10Mi       1.0Gi       5.2Gi
+Swap:             0B          0B          0B
+
+--- /proc/meminfo 摘要 ---
+MemTotal:        6117952 kB
+MemFree:         4522972 kB
+MemAvailable:    5467792 kB
+Buffers:            1412 kB
+Cached:          1005232 kB
+SwapTotal:             0 kB
+SwapFree:              0 kB
+Dirty:                68 kB
+
+--- cgroup 内存限额（容器内有效） ---
+/sys/fs/cgroup/memory.max = 4294967296
+/sys/fs/cgroup/memory.current = 848089088
+
+
+==============================================================================
+## 4. 磁盘 / 文件系统
+==============================================================================
+
+--- 块设备 ---
+NAME       SIZE TYPE FSTYPE MOUNTPOINT MODEL
+pmem0      254M disk                   
+└─pmem0p1  253M part                   
+
+--- 磁盘占用 ---
+Filesystem     Type      Size  Used Avail Use% Mounted on
+none           virtiofs  1.5T  419G  983G  30% /
+none           virtiofs  1.5T  419G  983G  30% /workspace
+kataShared     virtiofs  1.5T  419G  983G  30% /etc/hosts
+
+--- inode 占用 ---
+Filesystem       Inodes   IUsed    IFree IUse% Mounted on
+none           98304000 3715387 94588613    4% /
+none           98304000 3715387 94588613    4% /workspace
+kataShared     98304000 3715387 94588613    4% /etc/hosts
+
+--- 挂载点 ---
+/ none virtiofs rw,relatime
+/proc proc proc rw,nosuid,nodev,noexec,relatime
+/dev tmpfs tmpfs rw,nosuid,size=65536k,nr_inodes=240456,mode=755
+/dev/pts devpts devpts rw,nosuid,noexec,relatime,gid=5,mode=620,ptmxmode=666
+/dev/mqueue mqueue mqueue rw,nosuid,nodev,noexec,relatime
+/sys sysfs sysfs ro,nosuid,nodev,noexec,relatime
+/sys/fs/cgroup cgroup2 cgroup2 ro,nosuid,nodev,noexec,relatime,nsdelegate,memory_recursiveprot
+/workspace none[/local/workspace] virtiofs rw,relatime
+/run/shared none[/local/shared] virtiofs rw,relatime
+/data/tool none[/local/tool-data] virtiofs rw,relatime
+/data/user none[/local/user-data] virtiofs rw,relatime
+/data/agent none[/local/agent-data] virtiofs rw,relatime
+/etc/hosts kataShared[/ee3d6aca463216e8b89214bf225e45514e101efa8cf42aad05c17f6b972534b2-7abf3a11249690c7-hosts] virtiofs rw,relatime
+/dev/termination-log kataShared[/ee3d6aca463216e8b89214bf225e45514e101efa8cf42aad05c17f6b972534b2-098cac9ce4ec5a51-termination-log] virtiofs rw,relatime
+/etc/hostname kataShared[/ee3d6aca463216e8b89214bf225e45514e101efa8cf42aad05c17f6b972534b2-ff0a82e68c742efd-hostname] virtiofs rw,relatime
+/etc/resolv.conf kataShared[/ee3d6aca463216e8b89214bf225e45514e101efa8cf42aad05c17f6b972534b2-98e71aa17d36833b-resolv.conf] virtiofs rw,relatime
+/dev/shm shm tmpfs rw,relatime,size=961824k,nr_inodes=240456
+/var/log/tool none[/local/tool-log] virtiofs rw,relatime
+/var/log/agent none[/local/agent-log] virtiofs rw,relatime
+/proc/keys tmpfs[/null] tmpfs rw,nosuid,size=65536k,nr_inodes=240456,mode=755
+/proc/timer_list tmpfs[/null] tmpfs rw,nosuid,size=65536k,nr_inodes=240456,mode=755
+/proc/bus proc[/bus] proc ro,relatime
+/proc/fs proc[/fs] proc ro,relatime
+/proc/irq proc[/irq] proc ro,relatime
+/proc/sys proc[/sys] proc ro,relatime
+
+
+==============================================================================
+## 5. 网络环境
+==============================================================================
+
+--- 主机名解析 ---
+# Kubernetes-managed hosts file.
+127.0.0.1	localhost
+::1	localhost ip6-localhost ip6-loopback
+fe00::0	ip6-localnet
+fe00::0	ip6-mcastprefix
+fe00::1	ip6-allnodes
+fe00::2	ip6-allrouters
+10.69.131.15	all-in-one-82-g8j6l
+
+--- DNS 配置 ---
+nameserver 10.97.214.215
+
+--- 网卡与地址 ---
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+eth0             UP             10.69.131.15/12 fe80::216:3eff:fe66:cc1a/64 fe80::16:3ef3:bb66:cc1a/64 
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP group default qlen 1000
+    inet 10.69.131.15/12 brd 10.79.255.255 scope global eth0
+       valid_lft forever preferred_lft forever
+
+--- 路由表 ---
+default via 10.64.0.1 dev eth0 
+10.64.0.0/12 dev eth0 proto kernel scope link src 10.69.131.15 
+
+--- 邻居 / ARP ---
+10.64.0.1 dev eth0 lladdr ee:ff:ff:ff:ff:ff REACHABLE 
+
+--- 监听端口 ---
+Netid State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                   
+udp   UNCONN 0      0          127.0.0.1:323        0.0.0.0:*                                             
+udp   UNCONN 0      0              [::1]:323              *:*                                             
+tcp   LISTEN 0      0          127.0.0.1:9222       0.0.0.0:*                                             
+tcp   LISTEN 0      0            0.0.0.0:9090       0.0.0.0:*                                             
+tcp   LISTEN 0      0            0.0.0.0:9003       0.0.0.0:*    users:(("agent-tool-host",pid=838,fd=25))
+tcp   LISTEN 0      0            0.0.0.0:19091      0.0.0.0:*    users:(("agent-tool-host",pid=838,fd=23))
+tcp   LISTEN 0      0          127.0.0.1:18081      0.0.0.0:*                                             
+tcp   LISTEN 0      0          127.0.0.1:18080      0.0.0.0:*                                             
+tcp   LISTEN 0      0          127.0.0.1:51008      0.0.0.0:*    users:(("ckg_server",pid=839,fd=7))      
+tcp   LISTEN 0      0          127.0.0.1:5900       0.0.0.0:*                                             
+tcp   LISTEN 0      0          127.0.0.1:9002       0.0.0.0:*    users:(("agent-tool-host",pid=838,fd=26))
+tcp   LISTEN 0      0                  *:8088             *:*                                             
+tcp   LISTEN 0      0                  *:9091             *:*                                             
+tcp   LISTEN 0      0                  *:9001             *:*    users:(("agent-tool-host",pid=838,fd=21))
+tcp   LISTEN 0      0                  *:9000             *:*    users:(("agent-tool-host",pid=838,fd=28))
+tcp   LISTEN 0      0                  *:8999             *:*    users:(("agent-tool-host",pid=838,fd=27))
+tcp   LISTEN 0      0                  *:13080            *:*    users:(("fs-server",pid=840,fd=9))       
+tcp   LISTEN 0      0                  *:16000            *:*    users:(("agent-tool-host",pid=838,fd=24))
+tcp   LISTEN 0      0              [::1]:5900             *:*                                             
+tcp   LISTEN 0      0                  *:80               *:*    users:(("agent-tool-host",pid=838,fd=22))
+
+--- 活跃连接 ---
+Recv-Q Send-Q         Local Address:Port           Peer Address:Port Process                                   
+0      0               10.69.131.15:19091          10.97.87.210:40126 users:(("agent-tool-host",pid=838,fd=14))
+0      0               10.69.131.15:59650         10.97.212.238:8080                                           
+0      0                  127.0.0.1:51008             127.0.0.1:44498 users:(("ckg_server",pid=839,fd=8))      
+0      0                  127.0.0.1:18080             127.0.0.1:50660                                          
+0      0                  127.0.0.1:18080             127.0.0.1:51900                                          
+0      0                  127.0.0.1:33860             127.0.0.1:18080 users:(("ckg_server",pid=839,fd=10))     
+0      0                  127.0.0.1:44498             127.0.0.1:51008 users:(("agent-tool-host",pid=838,fd=17))
+0      0                  127.0.0.1:50660             127.0.0.1:18080                                          
+0      0                  127.0.0.1:51900             127.0.0.1:18080 users:(("ckg_server",pid=839,fd=13))     
+0      0                  127.0.0.1:18080             127.0.0.1:33860                                          
+0      0      [::ffff:10.69.131.15]:9091   [::ffff:10.97.85.91]:43732                                          
+0      0      [::ffff:10.69.131.15]:9000  [::ffff:10.205.61.29]:36238 users:(("agent-tool-host",pid=838,fd=15))
+0      0      [::ffff:10.69.131.15]:13080 [::ffff:10.205.61.29]:46368 users:(("fs-server",pid=840,fd=10))      
+
+--- 防火墙 ---
+[跳过] 未安装 ufw
+[跳过] 未安装 iptables
+
+--- 网络接口统计 ---
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 19704941   27590    0    0    0     0          0         0 19704941   27590    0    0    0     0       0          0
+  eth0: 18109456    6441    0    0    0     0          0         0  1191669    4615    0    0    0     0       0          0
+
+--- 代理环境变量 ---
+no_proxy=localhost,127.0.0.1,.svc,.cluster.local,::1
+https_proxy=http://127.0.0.1:18080
+NO_PROXY=localhost,127.0.0.1,.svc,.cluster.local,::1
+HTTPS_PROXY=http://127.0.0.1:18080
+HTTP_PROXY=http://127.0.0.1:18080
+http_proxy=http://127.0.0.1:18080
+
+--- 公网连通性 ---
+出口 IP (https://api.ipify.org): 失败 (http_code=000)
+出口 IP (https://ifconfig.me/ip): 115.190.92.241
+GitHub 可达性: 200
+
+--- socket 统计 ---
+Total: 138
+TCP:   198 (estab 13, closed 166, orphaned 0, timewait 166)
+
+Transport Total     IP        IPv6
+RAW	  0         0         0        
+UDP	  2         1         1        
+TCP	  32        20        12       
+INET	  34        21        13       
+FRAG	  0         0         0        
+
+
+
+==============================================================================
+## 6. 进程 / 服务
+==============================================================================
+
+--- 进程总数 / 线程数 ---
+进程数: 14
+    PID    PPID %CPU %MEM   RSS     ELAPSED COMMAND
+  44475     838  0.4  0.9 56336       00:44 MainThread
+  46544   46542  0.4  0.0   396       00:02 bash
+  44468     838  0.3  0.4 25208       00:44 MainThread
+    838     837  0.2  2.0 123652      17:41 agent-tool-host
+    837       1  0.2  0.3 21160       17:42 supervisord
+    839     837  0.1  0.8 52744       17:41 ckg_server
+    840     837  0.0  0.1  6216       17:41 fs-server
+      1       0  0.0  0.0   128       17:46 tini
+  46542     838  0.0  0.0  1252       00:02 zsh
+  46543     838  0.0  0.0   232       00:02 sh
+  46547   46544  0.0  0.0   164       00:02 tee
+  46705   46544  0.0  0.0  1468       00:00 bash
+  46706   46705  0.0  0.0  4060       00:00 ps
+  46707   46705  0.0  0.0  1608       00:00 head
+
+--- 内存占用 TOP10 ---
+    PID %MEM   RSS COMMAND
+    838  2.0 123652 agent-tool-host
+  44475  0.9 56336 MainThread
+    839  0.8 52744 ckg_server
+  44468  0.4 25208 MainThread
+    837  0.3 21160 supervisord
+    840  0.1  6456 fs-server
+  46709  0.0  4172 ps
+  46708  0.0  1508 bash
+  46710  0.0  1492 head
+  46542  0.0  1252 zsh
+
+--- systemd 服务（若可用） ---
+[跳过] 无 systemd 或非 init 环境
+
+
+==============================================================================
+## 7. 硬件 / 外设
+==============================================================================
+
+--- PCI 设备 ---
+[跳过] 未安装: lspci
+
+--- USB 设备 ---
+[跳过] 未安装: lsusb
+
+--- DMI / 主板信息 ---
+[跳过] 未安装: dmidecode
+
+--- 温度 / 风扇 ---
+[跳过] 未安装: sensors
+
+--- GPU ---
+[跳过] 无 nvidia-smi
+
+
+==============================================================================
+## 8. 软件运行环境
+==============================================================================
+
+--- 常用运行时版本 ---
+python3  Python 3.12.15
+python   Python 3.12.15
+node     v24.1.0
+npm      11.4.2
+go       go version go1.25.1 linux/amd64
+java     openjdk 25.0.4.1 2026-08-18 LTS
+rustc    rustc 1.92.0 (ded5c06cf 2025-12-08)
+gcc      gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+make     GNU Make 4.3
+git      git version 2.43.0
+uv       uv 0.7.8
+
+--- 环境变量（敏感值脱敏，超长值截断） ---
+AGENT_TOOL_HOST_IDE_DYNAMIC_CONF_FILE=/app/etc/ide_dynamic_config_basic.json
+AGENT_TOOL_HOST_MCP_SERVER_CONF_FILE=/app/etc/mcp_servers.json
+BROWSERUSE_SPK_ENABLED=true
+BROWSER_SNAPSHOT_DIR=/data/tool/browser_snapshots
+CARGO_HOME=/root/.cargo
+CARGO_TERM_COLOR=always
+CDP_USER_DATA_DIR=/data/tool/cdp-client-browser
+CFS_SOCKET=127.0.0.1:8999
+CFS_TOKEN=***REDACTED***
+CFS_TRANSPORT=tcp
+CI=true
+CKG_PORT=51008
+COREPACK_DEFAULT_TO_LATEST=0
+COREPACK_ENABLE_AUTO_PIN=0
+COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+COREPACK_ENABLE_STRICT=0
+CRAWLER_CDP_ENDPOINT=http://127.0.0.1:8088/v1/cdp
+DEBIAN_FRONTEND=noninteractive
+DEBUGINFOD_URLS=https://debuginfod.ubuntu.com 
+FS_SERVER_PORT=13080
+GIT_COMMITTER_EMAIL=solo-agent@trae.ai
+GIT_COMMITTER_NAME=trae-solo-agent [origin=mobile]
+GIT_EDITOR=true
+GIT_PAGER=cat
+GIT_TERMINAL_PROMPT=0
+GOBIN=/root/.local/share/mise/installs/go/1.25.1/bin
+GOROOT=/root/.local/share/mise/installs/go/1.25.1
+HOME=/root
+HOSTNAME=all-in-one-82-g8j6l
+HTTPS_PROXY=http://127.0.0.1:18080
+HTTP_PROXY=http://127.0.0.1:18080
+ICUBE_OFFICIAL_LARK_PLUGIN_INSTALLED=true
+ICUBE_USER_DATA_DIR=/data/user
+JAVA_HOME=/root/.local/share/mise/installs/java/25.0.4+101.0.LTS
+KUBERNETES_PORT=tcp://172.30.0.1:443
+KUBERNETES_PORT_443_TCP=tcp://172.30.0.1:443
+KUBERNETES_PORT_443_TCP_ADDR=172.30.0.1
+KUBERNETES_PORT_443_TCP_PORT=443
+KUBERNETES_PORT_443_TCP_PROTO=tcp
+KUBERNETES_SERVICE_HOST=172.30.0.1
+KUBERNETES_SERVICE_PORT=443
+KUBERNETES_SERVICE_PORT_HTTPS=443
+LANG=C.UTF-8
+LC_ALL=C.UTF-8
+LD_LIBRARY_PATH=/app/lib
+LOGNAME=root
+MCP_LOG_DIR=/var/log/tool/mcp
+MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES=none
+MISE_SHELL=bash
+MIX_ARCHIVES=/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/archives
+MIX_HOME=/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix
+NODE_OPTIONS=--require /app/mcp_proxy_bootstrap/preload.cjs
+NODE_PATH=/usr/lib/node_modules
+NO_PROXY=localhost,127.0.0.1,.svc,.cluster.local,::1
+NPM_CONFIG_YES=true
+NVM_BIN=/root/.nvm/versions/node/v24.1.0/bin
+NVM_CD_FLAGS=
+NVM_DIR=/root/.nvm
+NVM_INC=/root/.nvm/versions/node/v24.1.0/include/node
+NVM_NODEJS_ORG_MIRROR=https://mirrors.volces.com/nodejs-release/
+OLDPWD=/workspace
+OPEN_PREVIEW_CDP_ENDPOINT=http://127.0.0.1:8088/v1/cdp
+PAGER=cat
+PATH=/app/bin:/app/bin:/root/.swiftly/bin:/root/.phpenv/shims:/root/.pyenv/shims:/root/.pyenv/bin:/root/.local/share/mise/installs/bun/1.2.14/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/escripts:/root/.local/share/mise/installs/...<truncated>
+PHPENV_ROOT=/root/.phpenv
+PIPX_BIN_DIR=/root/.local/bin
+PREVIEW_PROXY_PUBLIC_PORT=16000
+PWD=/workspace
+PYENV_ROOT=/root/.pyenv
+PYENV_SHELL=bash
+PYTHONIOENCODING=utf-8
+PYTHONUTF8=1
+RUSTUP_DIST_SERVER=https://mirrors.aliyun.com/rustup
+RUSTUP_HOME=/root/.rustup
+RUSTUP_UPDATE_ROOT=https://mirrors.aliyun.com/rustup/rustup
+SENTINEL_STORAGE__AGENT_LOG_BUCKET=trae-remote-agent-cache-beijing-online
+SENTINEL_STORAGE__AGENT_LOG_PREFIX=agent-logs
+SHLVL=2
+SLARDAR_BID=trae_remote_cn
+SLARDAR_DOMAIN=https://mon.zijieapi.com
+SUPERVISOR_ENABLED=1
+SUPERVISOR_GROUP_NAME=agent-tool-host
+SUPERVISOR_PROCESS_NAME=agent-tool-host
+SUPERVISOR_SERVER_URL=unix:///run/supervisor.sock
+SWIFTLY_BIN_DIR=/root/.swiftly/bin
+SWIFTLY_HOME_DIR=/root/.local/share/swiftly
+SWIFTLY_TOOLCHAINS_DIR=/root/.local/share/swiftly/toolchains
+TERM=dumb
+TOOLHOST_CWD=/workspace
+TOOLHOST_EXTRA_ALLOWED_PATHS=/root/.trae:/tmp:/var/tmp:/data/user
+TOOLHOST_JOB_LOG_DIR=/var/log/tool/jobs
+TOOLHOST_RUNTIME_MODE=direct_fallback
+TOOLHOST_SPK_AUTH_MODE=***REDACTED***
+TRAE_CHAT_SESSION_ID=6b0127c2df2e771ca7521223
+TRAE_ENV_INITIALIZED=1
+TRAE_ENV_WORKSPACE=/workspace
+TRAE_LANE=prod
+TRAE_PROJECT_ID=rp_6b0127c2df2e771ca7521224
+TRAE_REGION=cn
+TRAE_REMOTE_AGENT_TOKEN=***REDACTED***
+TRAE_REMOTE_API_SERVER=https://trae-api-cn.mchost.guru/api/remote/v1
+TRAE_REMOTE_REGION=CN
+TRAE_REMOTE_SANDBOX_NAME=run-harness-6b0127c2df2e771ca7521223-37l1dhchscfdqjgjm06
+TRAE_SANDBOX_NEW_PERMISSION=1
+TRAE_USER_DATA_DIR=/data/user
+TRAE_USER_MESSAGE_ID=6b0127c2df2e771ca7521225
+TRAE_USER_SCOPE=default
+TZ=Asia/Shanghai
+UV_NO_PROGRESS=1
+_=/usr/bin/env
+__MISE_DIFF=eAFqWVjGtDg/J6VhcV5qeetSd38nT7+b7kk5idmpxlaJyZZmaRaWpmnGBmkWJinJRsamiWkmRmmWFhYWSWnmaUmWhsbJ5kkWZobmqcaWJkkmiUaWxgYGBqlJZhYmqUmJy9z9g/z9Q+DmmSdZGBgkmhkYGBsmG1qamZgYm6YaJVmaphomppobmJimGZpYmpiYG5okWaSmJRpbpqSZJKYYJ6YaGZunGBikpqz0cgxzjPfw93WFG5likJyYmmJmlpxilGZiZmqakmpmYGmQamyZkpJiYGiaYmBslmaUbGqcaJFi...<truncated>
+__MISE_EXE=/usr/bin/mise
+__MISE_ORIG_PATH=/root/.nvm/versions/node/v24.1.0/bin:/root/.pyenv/shims:/root/.pyenv/bin:/app/bin:/root/.local/bin:/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.cargo/bin:/root/.pyenv/bin:/root/.local/share/mise/shims:/root/.swiftly/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/...<truncated>
+__MISE_SESSION=eAHqWVjGtCYnPzElNSW+JD8/p3jCOigvOT8vLTO9eOI+/aL8/BJ9PQhfPzezOFUfwtYryc/NWQNhxxcklmQUT1icmlfWutTd38nT76Z7Uk5idqqxVWKypVmahaVpmrFBmoVJSrKRsWlimolRmqWFhUVSmnlakqWhcbJ5koWZoXmqsaVJkkmikaWxgYFBapKZhUlqUuIyd/8gf/8QuHnmSRYGBolmBgbGhsmGlmYmJsamqUZJlqaphomp5gYmpmmGJpYmJuaGJkkWqWmJxpYpaSaJKcaJqUbG5ikGBqkpK70c...<truncated>
+http_proxy=http://127.0.0.1:18080
+https_proxy=http://127.0.0.1:18080
+no_proxy=localhost,127.0.0.1,.svc,.cluster.local,::1
+
+
+==============================================================================
+## 9. 系统限制
+==============================================================================
+
+--- ulimit ---
+real-time non-blocking time  (microseconds, -R) unlimited
+core file size              (blocks, -c) 0
+data seg size               (kbytes, -d) unlimited
+scheduling priority                 (-e) 0
+file size                   (blocks, -f) unlimited
+pending signals                     (-i) 7504
+max locked memory           (kbytes, -l) 8192
+max memory size             (kbytes, -m) unlimited
+open files                          (-n) 1048576
+pipe size                (512 bytes, -p) 8
+POSIX message queues         (bytes, -q) 819200
+real-time priority                  (-r) 0
+stack size                  (kbytes, -s) 8192
+cpu time                   (seconds, -t) unlimited
+max user processes                  (-u) 7504
+virtual memory              (kbytes, -v) unlimited
+file locks                          (-x) unlimited
+
+--- 内核参数（关键项） ---
+fs.file-max = 9223372036854775807
+fs.inotify.max_user_watches = 15173
+kernel.pid_max = 4194304
+net.core.somaxconn = 4096
+net.ipv4.ip_forward = 0
+net.ipv4.ip_forward_update_priority = 1
+net.ipv4.ip_forward_use_pmtu = 0
+net.ipv4.tcp_max_syn_backlog = 128
+vm.overcommit_memory = 0
+vm.swappiness = 60
+
+--- 已加载模块数 ---
+模块: /proc/modules 不可用（容器/精简内核环境）
+
+采集完成 -> /workspace/sysinfo_snapshot.txt
