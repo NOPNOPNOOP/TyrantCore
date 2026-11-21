@@ -1,5 +1,5 @@
 系统信息快照
-采集时间: 2026-11-21 13:11:23 CST (+0800)
+采集时间: 2026-11-21 13:19:03 CST (+0800)
 采集主机: all-in-one-82-g8j6l
 
 
@@ -31,8 +31,8 @@ FQDN    : all-in-one-82-g8j6l
 arch    : x86_64
 
 --- 运行时长 / 负载 ---
- 13:11:23 up 17 min,  0 user,  load average: 0.72, 0.56, 0.37
-0.72 0.56 0.37 1/227 46559
+ 13:19:04 up 25 min,  0 user,  load average: 0.61, 0.62, 0.48
+0.61 0.62 0.48 1/234 67076
 
 --- 启动参数 ---
 tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 i8042.dumbkbd=1 i8042.nopnp=1 i8042.noaux=1 noreplace-smp reboot=k cryptomgr.notests net.ifnames=0 pci=lastbus=0 root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro ro rootfstype=ext4 console=hvc0 console=hvc1 quiet systemd.show_status=false panic=1 nr_cpus=240 selinux=0 systemd.unit=kata-containers.target systemd.mask=systemd-networkd.service systemd.mask=systemd-networkd.socket scsi_mod.scan=none agent.cdh_api_timeout=50 cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1
@@ -120,22 +120,22 @@ L3 cache:                                48 MiB (3 instances)
 
 --- free -h ---
                total        used        free      shared  buff/cache   available
-Mem:           5.8Gi       634Mi       4.3Gi        10Mi       1.0Gi       5.2Gi
+Mem:           5.8Gi       617Mi       4.3Gi        10Mi       1.0Gi       5.2Gi
 Swap:             0B          0B          0B
 
 --- /proc/meminfo 摘要 ---
 MemTotal:        6117952 kB
-MemFree:         4522972 kB
-MemAvailable:    5467792 kB
+MemFree:         4509728 kB
+MemAvailable:    5487604 kB
 Buffers:            1412 kB
-Cached:          1005232 kB
+Cached:          1037700 kB
 SwapTotal:             0 kB
 SwapFree:              0 kB
-Dirty:                68 kB
+Dirty:               264 kB
 
 --- cgroup 内存限额（容器内有效） ---
 /sys/fs/cgroup/memory.max = 4294967296
-/sys/fs/cgroup/memory.current = 848089088
+/sys/fs/cgroup/memory.current = 874008576
 
 
 ==============================================================================
@@ -149,15 +149,15 @@ pmem0      254M disk
 
 --- 磁盘占用 ---
 Filesystem     Type      Size  Used Avail Use% Mounted on
-none           virtiofs  1.5T  419G  983G  30% /
-none           virtiofs  1.5T  419G  983G  30% /workspace
-kataShared     virtiofs  1.5T  419G  983G  30% /etc/hosts
+none           virtiofs  1.5T  422G  980G  31% /
+none           virtiofs  1.5T  422G  980G  31% /workspace
+kataShared     virtiofs  1.5T  422G  980G  31% /etc/hosts
 
 --- inode 占用 ---
 Filesystem       Inodes   IUsed    IFree IUse% Mounted on
-none           98304000 3715387 94588613    4% /
-none           98304000 3715387 94588613    4% /workspace
-kataShared     98304000 3715387 94588613    4% /etc/hosts
+none           98304000 3737434 94566566    4% /
+none           98304000 3737434 94566566    4% /workspace
+kataShared     98304000 3737434 94566566    4% /etc/hosts
 
 --- 挂载点 ---
 / none virtiofs rw,relatime
@@ -246,16 +246,14 @@ tcp   LISTEN 0      0                  *:80               *:*    users:(("agent-
 
 --- 活跃连接 ---
 Recv-Q Send-Q         Local Address:Port           Peer Address:Port Process                                   
+0      0                  127.0.0.1:18080             127.0.0.1:55884                                          
+0      0                  127.0.0.1:55884             127.0.0.1:18080 users:(("ckg_server",pid=839,fd=12))     
 0      0               10.69.131.15:19091          10.97.87.210:40126 users:(("agent-tool-host",pid=838,fd=14))
 0      0               10.69.131.15:59650         10.97.212.238:8080                                           
 0      0                  127.0.0.1:51008             127.0.0.1:44498 users:(("ckg_server",pid=839,fd=8))      
 0      0                  127.0.0.1:18080             127.0.0.1:50660                                          
-0      0                  127.0.0.1:18080             127.0.0.1:51900                                          
-0      0                  127.0.0.1:33860             127.0.0.1:18080 users:(("ckg_server",pid=839,fd=10))     
 0      0                  127.0.0.1:44498             127.0.0.1:51008 users:(("agent-tool-host",pid=838,fd=17))
 0      0                  127.0.0.1:50660             127.0.0.1:18080                                          
-0      0                  127.0.0.1:51900             127.0.0.1:18080 users:(("ckg_server",pid=839,fd=13))     
-0      0                  127.0.0.1:18080             127.0.0.1:33860                                          
 0      0      [::ffff:10.69.131.15]:9091   [::ffff:10.97.85.91]:43732                                          
 0      0      [::ffff:10.69.131.15]:9000  [::ffff:10.205.61.29]:36238 users:(("agent-tool-host",pid=838,fd=15))
 0      0      [::ffff:10.69.131.15]:13080 [::ffff:10.205.61.29]:46368 users:(("fs-server",pid=840,fd=10))      
@@ -267,8 +265,8 @@ Recv-Q Send-Q         Local Address:Port           Peer Address:Port Process
 --- 网络接口统计 ---
 Inter-|   Receive                                                |  Transmit
  face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
-    lo: 19704941   27590    0    0    0     0          0         0 19704941   27590    0    0    0     0       0          0
-  eth0: 18109456    6441    0    0    0     0          0         0  1191669    4615    0    0    0     0       0          0
+    lo: 23230636   40805    0    0    0     0          0         0 23230636   40805    0    0    0     0       0          0
+  eth0: 21419043    9717    0    0    0     0          0         0  2330800    7401    0    0    0     0       0          0
 
 --- 代理环境变量 ---
 no_proxy=localhost,127.0.0.1,.svc,.cluster.local,::1
@@ -278,20 +276,48 @@ HTTPS_PROXY=http://127.0.0.1:18080
 HTTP_PROXY=http://127.0.0.1:18080
 http_proxy=http://127.0.0.1:18080
 
---- 公网连通性 ---
-出口 IP (https://api.ipify.org): 失败 (http_code=000)
-出口 IP (https://ifconfig.me/ip): 115.190.92.241
-GitHub 可达性: 200
+--- 代理链路 / 出口探测 ---
+代理地址   : http://127.0.0.1:18080
+监听状态   : 127.0.0.1:18080
+无凭据探测 : HTTP/1.1 403 Forbidden
+相邻端口   : HTTP/1.1 407 Proxy Authentication Required proxy-authenticate: Basic realm="Egress Sidecar"
+
+代理认证环境变量: 0 个命中
+
+经代理访问（HTTP 状态码，000=失败/被阻断）:
+  https://github.com                 200
+  https://pypi.org                   200
+  https://registry.npmjs.org         200
+  https://mirrors.aliyun.com         301
+  https://example.com                200
+  https://www.google.com             000
+
+绕过代理直连 example.com:443 -> 失败（说明出口必须走代理）
+经代理出口 IP -> 124.174.33.195
+CONNECT 隧道 -> HTTP/1.1 200 OK
+
+TCP 连通性（裸 TCP，不走代理）:
+  1.1.1.1:443          FAIL
+  8.8.8.8:53           FAIL
+  140.82.121.4:443     FAIL
+  10.97.214.215:53     OK
+
+--- 关键域名解析 ---
+github.com                 20.247.166.64
+pypi.org                   151.101.0.223,151.101.128.223,151.101.192.223,151.101.64.223
+registry.npmjs.org         104.16.0.34,104.16.1.34,104.16.10.34,104.16.11.34,104.16.2.34,104.16.3.34,104.16.4.34,104.16.5.34,104.16.6.34,104.16.7.34,104.16.8.34,104.16.9.34
+mirrors.aliyun.com         122.228.15.33,122.228.15.34,122.228.15.35,122.228.15.36,122.228.15.37,122.228.15.38,122.228.15.39,180.101.196.223
+www.google.com             157.240.7.20
 
 --- socket 统计 ---
-Total: 138
-TCP:   198 (estab 13, closed 166, orphaned 0, timewait 166)
+Total: 136
+TCP:   192 (estab 11, closed 163, orphaned 0, timewait 163)
 
 Transport Total     IP        IPv6
 RAW	  0         0         0        
 UDP	  2         1         1        
-TCP	  32        20        12       
-INET	  34        21        13       
+TCP	  29        17        12       
+INET	  31        18        13       
 FRAG	  0         0         0        
 
 
@@ -303,33 +329,33 @@ FRAG	  0         0         0
 --- 进程总数 / 线程数 ---
 进程数: 14
     PID    PPID %CPU %MEM   RSS     ELAPSED COMMAND
-  44475     838  0.4  0.9 56336       00:44 MainThread
-  46544   46542  0.4  0.0   396       00:02 bash
-  44468     838  0.3  0.4 25208       00:44 MainThread
-    838     837  0.2  2.0 123652      17:41 agent-tool-host
-    837       1  0.2  0.3 21160       17:42 supervisord
-    839     837  0.1  0.8 52744       17:41 ckg_server
-    840     837  0.0  0.1  6216       17:41 fs-server
-      1       0  0.0  0.0   128       17:46 tini
-  46542     838  0.0  0.0  1252       00:02 zsh
-  46543     838  0.0  0.0   232       00:02 sh
-  46547   46544  0.0  0.0   164       00:02 tee
-  46705   46544  0.0  0.0  1468       00:00 bash
-  46706   46705  0.0  0.0  4060       00:00 ps
-  46707   46705  0.0  0.0  1608       00:00 head
+    838     837  0.2  1.7 109704      25:48 agent-tool-host
+    837       1  0.2  0.3 21128       25:49 supervisord
+    839     837  0.1  0.8 54424       25:48 ckg_server
+  67061   67059  0.1  0.0   412       00:29 bash
+    840     837  0.0  0.1  6264       25:48 fs-server
+  44475     838  0.0  0.9 56336       08:51 MainThread
+  44468     838  0.0  0.4 25208       08:51 MainThread
+      1       0  0.0  0.0   128       25:53 tini
+  67059     838  0.0  0.0  1232       00:29 zsh
+  67060     838  0.0  0.0   232       00:29 sh
+  67064   67061  0.0  0.0   160       00:29 tee
+  68456   67061  0.0  0.0  1544       00:00 bash
+  68457   68456  0.0  0.0  4176       00:00 ps
+  68458   68456  0.0  0.0  1528       00:00 head
 
 --- 内存占用 TOP10 ---
     PID %MEM   RSS COMMAND
-    838  2.0 123652 agent-tool-host
+    838  1.8 110376 agent-tool-host
   44475  0.9 56336 MainThread
-    839  0.8 52744 ckg_server
+    839  0.8 54424 ckg_server
   44468  0.4 25208 MainThread
-    837  0.3 21160 supervisord
-    840  0.1  6456 fs-server
-  46709  0.0  4172 ps
-  46708  0.0  1508 bash
-  46710  0.0  1492 head
-  46542  0.0  1252 zsh
+    837  0.3 21600 supervisord
+    840  0.1  6264 fs-server
+  68460  0.0  4184 ps
+  68461  0.0  1544 head
+  68459  0.0  1492 bash
+  67059  0.0  1232 zsh
 
 --- systemd 服务（若可用） ---
 [跳过] 无 systemd 或非 init 环境
@@ -478,7 +504,7 @@ TRAE_REMOTE_REGION=CN
 TRAE_REMOTE_SANDBOX_NAME=run-harness-6b0127c2df2e771ca7521223-37l1dhchscfdqjgjm06
 TRAE_SANDBOX_NEW_PERMISSION=1
 TRAE_USER_DATA_DIR=/data/user
-TRAE_USER_MESSAGE_ID=6b0127c2df2e771ca7521225
+TRAE_USER_MESSAGE_ID=6b01292674a158dcab000fcb
 TRAE_USER_SCOPE=default
 TZ=Asia/Shanghai
 UV_NO_PROGRESS=1

@@ -132,19 +132,70 @@ sub "网络接口统计"
 run "cat /proc/net/dev"
 sub "代理环境变量"
 env | grep -iE '^(http_proxy|https_proxy|all_proxy|no_proxy|ftp_proxy|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY)=' || echo "（未设置代理环境变量）"
-sub "公网连通性"
+
+sub "代理链路 / 出口探测"
 if have curl; then
-    for ep in https://api.ipify.org https://ifconfig.me/ip https://ipinfo.io/ip; do
-        code=$(curl -s -o /tmp/.ipx -w '%{http_code}' --max-time 8 "$ep" 2>/dev/null || true)
-        if [ "$code" = "200" ]; then
-            echo "出口 IP ($ep): $(tr -d '\n' </tmp/.ipx)"
-            break
+    PROXY_URL="${https_proxy:-${HTTPS_PROXY:-}}"
+    if [ -n "$PROXY_URL" ]; then
+        PHOST=$(printf '%s' "$PROXY_URL" | sed -E 's#^[a-zA-Z]+://##; s#/.*$##')
+        PPORT="${PHOST##*:}"
+        echo "代理地址   : $PROXY_URL"
+        echo "监听状态   : $(ss -tlnH "sport = :$PPORT" 2>/dev/null | awk '{print $4}' | paste -sd' ' -)"
+        echo -n "无凭据探测 : "
+        curl -sS -D /tmp/.ph -o /dev/null --max-time 5 "http://$PHOST/" 2>/dev/null || true
+        head -1 /tmp/.ph 2>/dev/null | tr -d '\r' || echo "无响应"
+        grep -i 'proxy-authenticate' /tmp/.ph 2>/dev/null | tr -d '\r'
+        echo -n "相邻端口   : "
+        curl -sS -D /tmp/.ph2 -o /dev/null --max-time 5 "http://127.0.0.1:$((PPORT + 1))/" 2>/dev/null || true
+        head -1 /tmp/.ph2 2>/dev/null | tr -d '\r' | tr '\n' ' '
+        grep -i 'proxy-authenticate' /tmp/.ph2 2>/dev/null | tr -d '\r'
+        echo
+        echo "代理认证环境变量: $(env | grep -ciE 'proxy_(user|pass|auth)|PROXY_TOKEN' || true) 个命中"
+        echo
+        echo "经代理访问（HTTP 状态码，000=失败/被阻断）:"
+        for u in https://github.com https://pypi.org https://registry.npmjs.org \
+                 https://mirrors.aliyun.com https://example.com https://www.google.com; do
+            c=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "$u" 2>/dev/null || true)
+            printf '  %-34s %s\n' "$u" "${c:-000}"
+        done
+        echo
+        echo -n "绕过代理直连 example.com:443 -> "
+        d=$(curl -sS --noproxy '*' -o /dev/null -w '%{http_code}' --max-time 6 https://example.com 2>/dev/null || true)
+        [ "${d:-000}" = "000" ] && echo "失败（说明出口必须走代理）" || echo "$d（可直连）"
+        echo -n "经代理出口 IP -> "
+        eip=$(curl -sS -x "$PROXY_URL" --max-time 8 https://ifconfig.me/ip 2>/dev/null | tail -1)
+        echo "${eip:-获取失败}"
+        echo -n "CONNECT 隧道 -> "
+        if have nc; then
+            r=$(printf 'CONNECT github.com:443 HTTP/1.1\r\nHost: github.com:443\r\n\r\n' | timeout 6 nc 127.0.0.1 "$PPORT" 2>/dev/null | head -1 | tr -d '\r')
+            echo "${r:-无响应}"
+        else
+            echo "[跳过] 无 nc"
         fi
-        echo "出口 IP ($ep): 失败 (http_code=${code:-none})"
+    else
+        echo "未检测到代理环境变量，直接测试公网连通性:"
+        echo -n "  https://github.com -> "
+        curl -sS -o /dev/null -w '%{http_code}\n' --max-time 8 https://github.com 2>/dev/null || echo "失败"
+    fi
+    echo
+    echo "TCP 连通性（裸 TCP，不走代理）:"
+    for hp in 1.1.1.1:443 8.8.8.8:53 140.82.121.4:443 "$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf):53"; do
+        h=${hp%:*}; p=${hp#*:}
+        if timeout 4 bash -c "cat </dev/null >/dev/tcp/$h/$p" 2>/dev/null; then
+            printf '  %-20s OK\n' "$hp"
+        else
+            printf '  %-20s FAIL\n' "$hp"
+        fi
     done
-    echo "GitHub 可达性: $(curl -s -o /dev/null -w '%{http_code}' --max-time 8 https://github.com 2>/dev/null || echo 'fail')"
 else
     echo "[跳过] 未安装 curl"
+fi
+
+sub "关键域名解析"
+if have getent; then
+    for d in github.com pypi.org registry.npmjs.org mirrors.aliyun.com www.google.com api.openai.com; do
+        printf '%-26s %s\n' "$d" "$(getent ahostsv4 "$d" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd',' -)"
+    done
 fi
 sub "socket 统计"
 run "ss -s"
